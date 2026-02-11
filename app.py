@@ -317,7 +317,7 @@ if df is not None and selected_leader_name:
                         """
                         
                         res = client.chat.completions.create(
-                            model="gpt-4o",
+                            model="gpt-5",
                             messages=[{"role": "user", "content": prompt}]
                         )
                         analysis = res.choices[0].message.content
@@ -383,10 +383,11 @@ if df is not None and selected_leader_name:
                     
                     with chat_container:
                         with st.chat_message("assistant"):
-                            stream = client.chat.completions.create(model="gpt-4o", messages=msgs, stream=True)
+                            stream = client.chat.completions.create(model="gpt-5", messages=msgs, stream=True)
                             res = st.write_stream(stream)
                     st.session_state.messages.append({"role": "assistant", "content": res})
                 except Exception as e:
                     st.error(f"오류: {e}")
             else:
                 st.warning("API Key 미설정")
+
