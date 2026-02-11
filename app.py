@@ -15,18 +15,18 @@ st.set_page_config(
 )
 
 # --- [중요] API Key 로드 (JYL) ---
-# 로컬에서는 .streamlit/secrets.toml 파일에서,
-# 배포 환경(Streamlit Cloud)에서는 Settings > Secrets 에서 불러옵니다.
 try:
     OPENAI_API_KEY = st.secrets["JYL"]
 except FileNotFoundError:
-    st.error("API Key 설정 파일을 찾을 수 없습니다. (.streamlit/secrets.toml)")
-    st.stop()
+    # 로컬 개발 환경용 Fallback (필요시 삭제)
+    OPENAI_API_KEY = None
+    # st.error("API Key 설정 파일을 찾을 수 없습니다. (.streamlit/secrets.toml)")
+    # st.stop()
 except KeyError:
     st.error("Secrets에 'JYL' 키가 설정되지 않았습니다.")
     st.stop()
 
-# --- 기본 데모 데이터 (파싱 실패 시 Fallback용) ---
+# --- 기본 데모 데이터 (구조 보강) ---
 DEMO_DATA = {
     "leadership": {
         "summary": 4.8,
@@ -43,7 +43,20 @@ DEMO_DATA = {
             {"category": "자율환경 조성", "self": 5.0, "group": 4.4},
             {"category": "소통", "self": 4.8, "group": 4.4},
             {"category": "구성원 육성", "self": 4.8, "group": 4.3},
-        ]
+        ],
+        "comments": {
+            "boss": [
+                "팀원들과 소통하면서 성장할 수 있는 팀장",
+                "조직의 발전을 위해 방향성을 제시할 수 있는 팀장", 
+                "개선점: 팀장으로서 Leading 및 적극적 의견 제시 필요"
+            ],
+            "members": [
+                "이미지: 희생, 헌신, 배려, 책임감",
+                "강점: 세심함, 신입 매니저 교육, 다각도 해결방안",
+                "개선점: 신임 팀장으로서의 경험치 부족",
+                "기대: 지금처럼만 해주시면 너무 감사함"
+            ]
+        }
     },
     "oei": {
         "summary": 4.6,
@@ -57,10 +70,11 @@ DEMO_DATA = {
             {"category": "상호 협력", "self": 3.0, "team": 4.5, "type": "Underestimation"},
             {"category": "R&C 확보", "self": 3.0, "team": 4.3, "type": "Underestimation"},
             {"category": "명확한 목표", "self": 5.0, "team": 4.8, "type": "Alignment"},
+            {"category": "신속한 상황 인식", "self": 5.0, "team": 4.5, "type": "Overestimation"},
         ],
         "comments": {
             "strength": ["개인 역량 존중", "자율적 분위기", "각자 일을 열심히 함", "소통과 배려"],
-            "weakness": ["개인주의 우려", "적극적 소통 필요"]
+            "weakness": ["개인주의가 이기주의로 보일 위험", "적극적 소통 부족"]
         }
     }
 }
@@ -81,12 +95,7 @@ def extract_text_from_pdf(file):
 
 # --- 데이터 파싱 및 구조화 (시뮬레이션) ---
 def analyze_report_data(l_text, o_text):
-    """
-    실제로는 여기서 텍스트 내의 패턴(Regex)을 찾아 점수를 추출해야 합니다.
-    현재 프로토타입에서는 파일이 업로드 되면 분석하는 척(Progress Bar) 하고,
-    데모 데이터를 반환하여 화면을 구성합니다.
-    """
-    progress_text = "데이터 분석 중입니다. 잠시만 기다려주세요."
+    progress_text = "데이터 분석 중입니다..."
     my_bar = st.progress(0, text=progress_text)
 
     for percent_complete in range(100):
@@ -94,9 +103,6 @@ def analyze_report_data(l_text, o_text):
         my_bar.progress(percent_complete + 1, text=progress_text)
     
     my_bar.empty()
-    
-    # [TODO] 여기에 실제 파싱 로직을 구현하여 DEMO_DATA 구조에 맞춰 값을 채워넣으면 됩니다.
-    # 현재는 데모 데이터를 그대로 반환합니다.
     return DEMO_DATA
 
 # --- 사이드바 UI ---
@@ -104,7 +110,7 @@ with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/SK_logo.svg/1200px-SK_logo.svg.png", width=60)
     st.title("📂 리포트 업로드")
     
-    st.info("대상자 분들은 본인의 진단 리포트(PDF)를 아래에 업로드해주세요. 개인 정보는 저장되지 않습니다.")
+    st.info("본인의 진단 리포트(PDF)를 업로드해주세요. (개인정보 미저장)")
     
     leadership_file = st.file_uploader("1. 리더십 진단 보고서", type="pdf")
     oei_file = st.file_uploader("2. 조직효과성(OEI) 보고서", type="pdf")
@@ -122,7 +128,7 @@ if "analyzed_data" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 파일이 업로드 되었고, 아직 분석 전이라면 분석 실행
+# 파일 업로드 처리
 if leadership_file and oei_file and st.session_state.analyzed_data is None:
     l_text = extract_text_from_pdf(leadership_file)
     o_text = extract_text_from_pdf(oei_file)
@@ -131,18 +137,14 @@ if leadership_file and oei_file and st.session_state.analyzed_data is None:
         data = analyze_report_data(l_text, o_text)
         st.session_state.analyzed_data = data
         
-        # 코칭 챗봇 초기 메시지 (분석 결과 기반)
+        # 코칭 챗봇 초기 메시지
         if not st.session_state.messages:
             gaps = [g for g in data['oei']['gaps'] if abs(g['self'] - g['team']) >= 0.5]
             main_issue = gaps[0]['category'] if gaps else "소통"
-            gap_type = gaps[0]['type'] if gaps else "Alignment"
             
-            context_msg = "팀장님은 스스로를 낮게 평가했지만 팀원들은 높게 평가했습니다." if gap_type == "Underestimation" else "팀원들의 생각보다 본인의 평가가 높습니다."
-
-            welcome_msg = f"""반갑습니다, 팀장님. 업로드해주신 리포트 분석이 완료되었습니다. 
+            welcome_msg = f"""반갑습니다, 팀장님. 분석이 완료되었습니다.
             
-데이터를 보니 **'{main_issue}'** 항목에서 리더님과 구성원의 인식 차이가 발견되었습니다. ({context_msg})
-            
+데이터를 보니 **'{main_issue}'** 항목에서 리더님과 구성원의 인식 차이가 발견되었습니다.
 이 결과에 대해 어떻게 생각하시나요? 편하게 말씀해 주시면 대화를 이어가겠습니다."""
             
             st.session_state.messages.append({"role": "assistant", "content": welcome_msg})
@@ -150,123 +152,179 @@ if leadership_file and oei_file and st.session_state.analyzed_data is None:
 # --- 화면 렌더링 ---
 
 if st.session_state.analyzed_data is None:
-    # [초기 화면]
-    st.title("🏆 AI 리더십 코칭 (Beta)")
+    st.title("🏆 AI 리더십 코칭")
     st.markdown("""
     ### 환영합니다!
     이 앱은 리더십 진단 결과를 바탕으로 **개인 맞춤형 인사이트**와 **AI 코칭**을 제공합니다.
     
     **사용 방법:**
-    1. 왼쪽 사이드바에서 **리더십 진단 보고서**와 **OEI 보고서** PDF를 업로드하세요.
-    2. AI가 자동으로 데이터를 추출하여 대시보드를 생성합니다.
-    3. **AI 코치**와 대화하며 나만의 Action Plan을 수립해보세요.
+    1. 왼쪽 사이드바에서 **리더십 진단** 및 **OEI 보고서** PDF를 업로드하세요.
+    2. AI가 데이터를 분석하여 대시보드를 생성합니다.
+    3. **AI 코치**와 대화하며 Action Plan을 수립해보세요.
     """)
-    
     st.warning("👈 왼쪽 사이드바를 열어 파일을 업로드해주세요.")
 
 else:
-    # [분석 완료 대시보드 화면]
     data = st.session_state.analyzed_data
     
-    st.title("📊 진단 결과 & AI 코칭")
+    st.title("📊 진단 결과 분석")
     
-    tab1, tab2, tab3 = st.tabs(["종합 대시보드", "인식 차이 분석", "🤖 AI 코칭"])
+    # 탭 재구성
+    tabs = st.tabs(["종합 대시보드", "리더십 진단 심층분석", "조직효과성 진단 심층분석", "🤖 AI 코칭"])
     
-    # Tab 1: 종합 대시보드
-    with tab1:
-        col1, col2, col3 = st.columns(3)
-        col1.metric("리더십 점수 (Self)", f"{data['leadership']['summary']}점", "+0.4 (그룹평균 대비)")
-        col2.metric("조직효과성 (Output)", f"{data['oei']['summary']}점", "상위 20%")
-        col3.metric("팀 강점 키워드", data['oei']['comments']['strength'][0])
+    # [TAB 1] 종합 대시보드
+    with tabs[0]:
+        st.subheader("Overview")
+        col1, col2 = st.columns(2)
+        col1.metric("리더십 종합 점수", f"{data['leadership']['summary']} / 5.0", "+0.4 (그룹평균 대비)")
+        col2.metric("조직효과성 (Output)", f"{data['oei']['summary']} / 5.0", "상위 20%")
         
         c1, c2 = st.columns(2)
         with c1:
-            st.subheader("리더십 역량 (Radar Chart)")
+            st.markdown("##### 리더십 역량 밸런스")
             df_radar = pd.DataFrame(data['leadership']['details'])
             fig = go.Figure()
-            fig.add_trace(go.Scatterpolar(
-                r=df_radar['self'], theta=df_radar['category'], fill='toself', name='본인', line_color='#2563eb'
-            ))
-            fig.add_trace(go.Scatterpolar(
-                r=df_radar['group'], theta=df_radar['category'], fill='toself', name='그룹평균', line_color='#94a3b8', opacity=0.5
-            ))
-            fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), margin=dict(t=20, b=20))
+            fig.add_trace(go.Scatterpolar(r=df_radar['self'], theta=df_radar['category'], fill='toself', name='본인'))
+            fig.add_trace(go.Scatterpolar(r=df_radar['group'], theta=df_radar['category'], fill='toself', name='그룹평균', opacity=0.5))
+            fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), margin=dict(t=20, b=20), height=350)
             st.plotly_chart(fig, use_container_width=True)
             
         with c2:
-            st.subheader("조직 효과성 (I-P-O)")
+            st.markdown("##### 조직 효과성 흐름 (I-P-O)")
             df_oei = pd.DataFrame(data['oei']['stages'])
             fig_bar = go.Figure([go.Bar(x=df_oei['stage'], y=df_oei['score'], marker_color=['#60a5fa', '#3b82f6', '#2563eb'])])
             fig_bar.update_yaxes(range=[0, 5.5])
-            fig_bar.update_layout(margin=dict(t=20, b=20))
+            fig_bar.update_layout(margin=dict(t=20, b=20), height=350)
             st.plotly_chart(fig_bar, use_container_width=True)
 
-    # Tab 2: Gap 분석
-    with tab2:
-        st.subheader("👁️ 리더와 구성원의 인식 차이 (Blind Spot)")
-        st.info("점수 차이가 **0.5점 이상** 나는 항목들입니다. 이 차이가 발생하는 원인을 파악하는 것이 코칭의 핵심입니다.")
+    # [TAB 2] 리더십 진단 심층분석
+    with tabs[1]:
+        st.subheader("리더십 상세 분석")
+        
+        # 1. 항목별 점수차 (Gap Analysis)
+        st.markdown("##### 1. 항목별 점수 및 인식 차이 (Self - Group)")
+        df_detail = pd.DataFrame(data['leadership']['details'])
+        df_detail['Gap'] = df_detail['self'] - df_detail['group']
+        df_detail['Status'] = df_detail['Gap'].apply(lambda x: 'Over' if x > 0.5 else ('Under' if x < -0.5 else 'Fit'))
+        
+        # 차트로 시각화 (막대)
+        fig_diff = go.Figure()
+        fig_diff.add_trace(go.Bar(
+            x=df_detail['category'], 
+            y=df_detail['self'], 
+            name='본인', 
+            marker_color='#2563eb'
+        ))
+        fig_diff.add_trace(go.Bar(
+            x=df_detail['category'], 
+            y=df_detail['group'], 
+            name='구성원', 
+            marker_color='#94a3b8'
+        ))
+        fig_diff.update_layout(barmode='group', height=400, margin=dict(t=20, b=50))
+        st.plotly_chart(fig_diff, use_container_width=True)
+
+        # 2. 주관식 분석
+        st.markdown("---")
+        st.markdown("##### 2. 주관식 코멘트 분석")
+        lc1, lc2 = st.columns(2)
+        with lc1:
+            st.info("**상사의 기대사항**")
+            for comment in data['leadership']['comments']['boss']:
+                st.write(f"- {comment}")
+        with lc2:
+            st.success("**구성원의 목소리**")
+            for comment in data['leadership']['comments']['members']:
+                st.write(f"- {comment}")
+
+    # [TAB 3] 조직효과성 진단 심층분석
+    with tabs[2]:
+        st.subheader("조직 효과성(OEI) 상세 분석")
+        
+        # 1. Gap Analysis
+        st.markdown("##### 1. 인식 차이 (Blind Spot & Hidden Strength)")
+        st.caption("점수 차이가 0.5점 이상 나는 항목을 통해 인식의 맹점을 확인하세요.")
         
         gap_data = data['oei']['gaps']
         if gap_data:
             gap_df = pd.DataFrame(gap_data)
-            # 스타일링: Type에 따라 색상 변경
             def color_type(val):
-                color = 'green' if val == 'Underestimation' else 'orange' if val == 'Overestimation' else 'black'
-                return f'color: {color}; font-weight: bold'
+                if val == 'Underestimation': return 'color: green; font-weight: bold' # 숨겨진 강점
+                if val == 'Overestimation': return 'color: red; font-weight: bold'   # 맹점
+                return ''
             
-            st.dataframe(gap_df.style.applymap(color_type, subset=['type']), use_container_width=True)
+            st.dataframe(
+                gap_df[['category', 'self', 'team', 'type']].style.applymap(color_type, subset=['type']),
+                use_container_width=True,
+                column_config={
+                    "category": "항목",
+                    "self": "본인 점수",
+                    "team": "팀원 점수",
+                    "type": "유형"
+                }
+            )
         else:
             st.write("특이한 인식 차이가 발견되지 않았습니다.")
-            
-        st.markdown("---")
-        k1, k2 = st.columns(2)
-        k1.success(f"**팀원들이 말하는 강점:** {', '.join(data['oei']['comments']['strength'])}")
-        k2.warning(f"**팀원들의 우려사항:** {', '.join(data['oei']['comments']['weakness'])}")
 
-    # Tab 3: AI 코칭 (Chatbot)
-    with tab3:
+        # 2. 주관식 분석
+        st.markdown("---")
+        st.markdown("##### 2. 팀 강점 및 보완점")
+        oc1, oc2 = st.columns(2)
+        with oc1:
+            st.success("**팀 강점 (Strength)**")
+            for s in data['oei']['comments']['strength']:
+                st.write(f"💪 {s}")
+        with oc2:
+            st.error("**보완 필요점 (Weakness)**")
+            for w in data['oei']['comments']['weakness']:
+                st.write(f"⚠️ {w}")
+
+    # [TAB 4] AI 코칭
+    with tabs[3]:
         st.subheader("💬 AI 리더십 코치")
-        st.markdown("분석된 데이터를 바탕으로 **실제 코칭 대화**를 진행합니다. 솔직하게 답변해 보세요.")
+        st.markdown("분석된 데이터를 바탕으로 **Action Plan**을 수립하는 코칭 대화입니다.")
         
-        # 채팅 히스토리 출력
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]):
-                st.write(msg["content"])
+        chat_container = st.container()
         
-        # 사용자 입력 처리
+        with chat_container:
+            for msg in st.session_state.messages:
+                with st.chat_message(msg["role"]):
+                    st.write(msg["content"])
+        
         if prompt := st.chat_input("답변을 입력하세요..."):
-            # 1. 사용자 메시지 표시
-            st.chat_message("user").write(prompt)
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            
-            # 2. OpenAI API 호출 (심어둔 키 사용)
-            try:
-                client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            if not OPENAI_API_KEY:
+                st.error("API Key가 설정되지 않아 코칭을 진행할 수 없습니다.")
+            else:
+                st.chat_message("user").write(prompt)
+                st.session_state.messages.append({"role": "user", "content": prompt})
                 
-                # 시스템 프롬프트: 분석 데이터를 컨텍스트로 주입
-                system_instruction = f"""
-                너는 10년차 전문 리더십 코치야. 사용자의 진단 데이터는 다음과 같아: {data}
-                
-                특히 '{data['oei']['gaps']}'의 인식 차이와 '{data['oei']['comments']['weakness']}'의 우려사항을 중점적으로 다뤄줘.
-                
-                [코칭 가이드]
-                1. 사용자의 답변에 공감해주고, 구체적인 행동(Action Plan)을 이끌어내기 위한 질문을 던져.
-                2. 한 번에 길게 설명하지 말고, 대화하듯이 짧게(3~4문장) 질문해.
-                3. GROW 모델(Goal, Reality, Options, Will) 순서로 대화를 이끌어.
-                4. 말투는 정중하면서도 따뜻하게("~하군요", "~어떠신가요?") 해줘.
-                """
-                
-                messages_payload = [{"role": "system", "content": system_instruction}] + st.session_state.messages
-                
-                with st.chat_message("assistant"):
-                    stream = client.chat.completions.create(
-                        model="gpt-4o",  # 또는 gpt-3.5-turbo
-                        messages=messages_payload,
-                        stream=True
-                    )
-                    response = st.write_stream(stream)
-                
-                st.session_state.messages.append({"role": "assistant", "content": response})
-                
-            except Exception as e:
-                st.error(f"오류가 발생했습니다: {e}")
+                try:
+                    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                    
+                    # 프롬프트 강화: 각 탭의 분석 내용 반영
+                    system_instruction = f"""
+                    너는 SK그룹의 리더십 코치야. 
+                    사용자의 진단 데이터: {data}
+                    
+                    특히 다음 사항에 집중해:
+                    1. 리더십 진단에서 본인({data['leadership']['summary']})과 그룹 간의 인식 차이.
+                    2. OEI 진단에서의 맹점: {data['oei']['gaps']}
+                    3. 구성원의 우려사항: {data['oei']['comments']['weakness']}
+                    
+                    GROW 모델로 코칭하고, 따뜻하지만 정곡을 찌르는 질문을 해줘.
+                    """
+                    
+                    messages_payload = [{"role": "system", "content": system_instruction}] + st.session_state.messages
+                    
+                    with st.chat_message("assistant"):
+                        stream = client.chat.completions.create(
+                            model="gpt-5-nano",
+                            messages=messages_payload,
+                            stream=True
+                        )
+                        response = st.write_stream(stream)
+                    
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                    
+                except Exception as e:
+                    st.error(f"오류가 발생했습니다: {e}")
