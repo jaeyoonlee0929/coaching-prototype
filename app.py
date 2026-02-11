@@ -3,9 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import pdfplumber
 import openai
-import os
-import time
 import re
+import time
 
 # --- 페이지 설정 ---
 st.set_page_config(
@@ -16,16 +15,13 @@ st.set_page_config(
 )
 
 # --- [중요] API Key 로드 (JYL) ---
+# .streamlit/secrets.toml 파일에 [JYL] 섹션이 있어야 함
 try:
     OPENAI_API_KEY = st.secrets["JYL"]
-except FileNotFoundError:
+except (FileNotFoundError, KeyError):
     OPENAI_API_KEY = None
-except KeyError:
-    # 로컬 테스트 등을 위해 에러가 아닌 경고로 처리 (키가 없으면 코칭만 안됨)
-    OPENAI_API_KEY = None
-    st.warning("Secrets에 'JYL' 키가 설정되지 않았습니다. AI 코칭 기능이 제한됩니다.")
 
-# --- 1. PDF 텍스트 추출 및 전처리 ---
+# --- PDF 텍스트 추출 함수 ---
 def extract_text_from_pdf(file):
     full_text = ""
     try:
@@ -39,7 +35,14 @@ def extract_text_from_pdf(file):
         st.error(f"PDF 읽기 오류: {e}")
         return ""
 
-# --- 2. 리더십 진단 파싱 로직 (개선됨) ---
+# --- 텍스트 전처리 함수 ---
+def normalize_text(text):
+    # 줄바꿈을 공백으로 변경하고, 다중 공백을 하나로 축소
+    # 다만, 주관식 파싱을 위해 줄바꿈은 보존하는 버전도 필요할 수 있음
+    # 여기서는 '검색용' 텍스트를 만듭니다.
+    return re.sub(r'\s+', ' ', text).strip()
+
+# --- 1. 리더십 진단 파싱 로직 ---
 def parse_leadership_report(text):
     data = {
         "summary": 0.0,
@@ -47,11 +50,11 @@ def parse_leadership_report(text):
         "comments": {"boss": [], "members": []}
     }
     
-    # 파싱 정확도를 위해 공백 제거한 텍스트 생성
+    # 검색을 위해 공백 제거된 버전 생성 (항목명 매칭용)
+    # 예: "SKMS에 대한 확신" -> "SKMS에대한확신"
     clean_text = re.sub(r'\s+', '', text)
     
-    # [매핑] 보고서 항목명 -> 표시할 이름
-    # 주의: PDF상의 텍스트(공백제거)와 정확히 일치해야 함
+    # [항목 매핑] PDF 내 텍스트(공백제거) : 표시할 이름
     items_map = {
         "SKMS에대한확신": "SKMS 확신",
         "패기/솔선수범": "패기/솔선수범",
@@ -69,62 +72,70 @@ def parse_leadership_report(text):
 
     scores = []
     
-    # 점수 추출 로직: 항목명 뒤에 나오는 숫자 패턴 (x.x ... x.x) 찾기
+    # 점수 추출: 항목명 뒤에 나오는 5.0 이하의 숫자(x.x) 패턴 찾기
     for pdf_key, label in items_map.items():
-        # 패턴: 항목명 + 중간문자들 + 숫자(본인) + 중간문자들 + 숫자(그룹)
-        # 예: SKMS에대한확신...4.8...4.3
-        pattern = re.compile(rf"{re.escape(pdf_key)}.*?(\d\.\d).*?(\d\.\d)", re.DOTALL)
+        # 패턴: 항목명 ... (0~5점 사이 숫자) ... (0~5점 사이 숫자)
+        # 예: SKMS에대한확신 ... 4.8 ... 4.3
+        # 주의: 2025, 14페이지 같은 숫자를 피하기 위해 [0-5]\.\d 패턴 사용
+        pattern = re.compile(rf"{re.escape(pdf_key)}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
         match = pattern.search(clean_text)
         
         if match:
-            self_val = float(match.group(1))
-            group_val = float(match.group(2))
-            data["details"].append({
-                "category": label,
-                "self": self_val,
-                "group": group_val
-            })
-            scores.append(self_val)
+            try:
+                self_val = float(match.group(1))
+                group_val = float(match.group(2))
+                
+                data["details"].append({
+                    "category": label,
+                    "self": self_val,
+                    "group": group_val
+                })
+                scores.append(self_val)
+            except ValueError:
+                continue
     
     if scores:
         data["summary"] = round(sum(scores) / len(scores), 1)
     
-    # 주관식 코멘트 추출 (원본 텍스트 사용)
-    # 질문 키워드를 기준으로 텍스트 블록을 나눔
-    
+    # --- 주관식 코멘트 추출 (원본 텍스트 기반) ---
     # 상사 응답
     if "상사 응답" in text:
-        # 상사 응답 섹션 추출
-        section_match = re.search(r"상사 응답(.*?)(구성원 응답|$)", text, re.DOTALL)
-        if section_match:
-            section_text = section_match.group(1)
-            # '·' 또는 '-'로 시작하는 줄 추출
-            comments = re.findall(r"[·-]\s*(.*)", section_text)
-            # 너무 짧거나 의미 없는 문장 제외
-            data["comments"]["boss"] = [c.strip() for c in comments if len(c.strip()) > 3]
+        try:
+            # "상사 응답" ~ "구성원 응답" 사이의 텍스트
+            start = text.find("상사 응답")
+            end = text.find("구성원 응답")
+            section = text[start:end]
+            
+            # '·' (가운뎃점)으로 시작하는 문장만 추출
+            lines = re.findall(r"[·]\s*(.*)", section)
+            # 질문 텍스트("~모습은?", "~사항은?") 제외 필터링
+            data["comments"]["boss"] = [l.strip() for l in lines if not l.strip().endswith('?')]
+        except: pass
 
     # 구성원 응답
     if "구성원 응답" in text:
-        # 구성원 응답 섹션들 (여러 페이지에 걸쳐 있을 수 있음)
-        # "구성원 응답" 키워드 이후의 모든 텍스트에서 추출
-        member_section_start = text.find("구성원 응답")
-        member_text = text[member_section_start:]
-        
-        # 주관식 답변 추출 (· 로 시작하는 문장)
-        comments = re.findall(r"[·-]\s*(.*)", member_text)
-        
-        # 상사 응답과 중복 제거 및 필터링
-        filtered_comments = []
-        for c in comments:
-            c = c.strip()
-            if len(c) > 3 and c not in data["comments"]["boss"] and "SK" not in c and "PAGE" not in c:
-                 filtered_comments.append(c)
-        
-        data["comments"]["members"] = filtered_comments
+        try:
+            # "구성원 응답" 이후 텍스트
+            start = text.find("구성원 응답")
+            section = text[start:]
+            
+            # '·' 로 시작하는 문장 추출
+            lines = re.findall(r"[·]\s*(.*)", section)
+            # 질문 및 페이지 번호 등 노이즈 제거
+            clean_lines = []
+            for l in lines:
+                l = l.strip()
+                if l.endswith('?') or "SK" in l or len(l) < 2:
+                    continue
+                clean_lines.append(l)
+            
+            # 상사 응답과 중복 제거
+            data["comments"]["members"] = [c for c in clean_lines if c not in data["comments"]["boss"]]
+        except: pass
 
     return data
 
-# --- 3. OEI 진단 파싱 로직 (개선됨) ---
+# --- 2. OEI 진단 파싱 로직 ---
 def parse_oei_report(text):
     data = {
         "summary": 0.0,
@@ -135,21 +146,20 @@ def parse_oei_report(text):
     
     clean_text = re.sub(r'\s+', '', text)
     
-    # 1. Summary 점수 (Input, Process, Output)
-    # 스냅샷 페이지에서 추출 (Input4.6 ... Process4.5 ... Output4.7)
-    stages = ["Input", "Process", "Output"]
-    
-    for stage in stages:
-        # "Input" 뒤에 나오는 숫자 찾기
-        match = re.search(rf"{stage}.*?(\d\.\d)", clean_text)
-        score = float(match.group(1)) if match else 0.0
-        data["stages"].append({"stage": stage, "score": score})
+    # 1. Summary (Input, Process, Output)
+    # Output 점수 추출
+    # 패턴: Output ... 숫자
+    match_out = re.search(r"Output.*?([0-5]\.\d)", clean_text)
+    if match_out:
+        data["summary"] = float(match_out.group(1))
         
-        if stage == "Output":
-            data["summary"] = score
+    # Input, Process도 추출 시도
+    for stage in ["Input", "Process", "Output"]:
+        match = re.search(rf"{stage}.*?([0-5]\.\d)", clean_text)
+        if match:
+            data["stages"].append({"stage": stage, "score": float(match.group(1))})
 
-    # 2. Gap 분석을 위한 상세 항목 점수 추출
-    # 항목명 리스트 (PDF 텍스트 기준)
+    # 2. Gap 분석 (상세 항목)
     oei_items = [
         "명확한목표와업무방향", "목표달성을위한우선순위설정", "변화공감/지지",
         "자율적업무환경조성", "업무장애요인개선", "일하는방식의원칙·체계", "일과삶의균형",
@@ -163,65 +173,63 @@ def parse_oei_report(text):
     ]
     
     for item in oei_items:
-        # 패턴: 항목명 ... 본인점수 ... 팀점수
-        # 예: 명확한목표와업무방향 ... 5.0 ... 4.8
-        pattern = re.compile(rf"{re.escape(item)}.*?(\d\.\d).*?(\d\.\d)", re.DOTALL)
+        # OEI 리포트 순서: 항목명 ... 본인점수 ... 본인팀점수 ... (신임리더평균) ... (Percentile)
+        # 예: 명확한목표와... 5.0 ... 4.8
+        pattern = re.compile(rf"{re.escape(item)}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
         match = pattern.search(clean_text)
         
         if match:
-            self_val = float(match.group(1))
-            team_val = float(match.group(2))
-            
-            # Gap 계산
-            gap = team_val - self_val
-            gap_type = "Alignment"
-            if gap >= 0.5: gap_type = "Underestimation" # 나는 낮게, 팀은 높게 (숨겨진 강점)
-            if gap <= -0.5: gap_type = "Overestimation" # 나는 높게, 팀은 낮게 (맹점)
-            
-            # 원래 이름으로 복원 (공백 추가 등은 생략하고 의미 전달 위주로)
-            display_name = item.replace("R&C", "R&C ").replace("목표", " 목표")
-            
-            if gap_type != "Alignment":
-                data["gaps"].append({
-                    "category": display_name,
-                    "self": self_val,
-                    "team": team_val,
-                    "type": gap_type
-                })
+            try:
+                self_val = float(match.group(1))
+                team_val = float(match.group(2))
+                
+                # Gap 계산
+                gap = team_val - self_val
+                gap_type = "Alignment"
+                if gap >= 0.5: gap_type = "Underestimation" # 숨겨진 강점
+                if gap <= -0.5: gap_type = "Overestimation" # 맹점
+                
+                # 이름 복원 (가독성 위해)
+                display_name = item
+                
+                if gap_type != "Alignment":
+                    data["gaps"].append({
+                        "category": display_name,
+                        "self": self_val,
+                        "team": team_val,
+                        "type": gap_type
+                    })
+            except ValueError:
+                continue
 
-    # 3. 주관식 (강점/보완점)
-    # 원본 텍스트(text) 사용
+    # 3. 주관식 (강점/보완점) - 원본 텍스트 사용
+    # 질문 텍스트 패턴 정의
+    q_strength = "강점은 무엇입니까"
+    q_weakness = "보완해야 할 점은 무엇입니까"
+    q_obstacle = "장애요인"
     
-    # 강점
-    if "강점은 무엇입니까" in text:
-        # 해당 질문 뒤부터 다음 질문 전까지
-        # 보통 질문은 '?'로 끝남.
-        start_idx = text.find("강점은 무엇입니까")
-        sub_text = text[start_idx:]
-        # 다음 질문('보완해야 할 점' 등) 찾기
-        next_q_idx = sub_text.find("보완해야 할 점")
-        if next_q_idx == -1: next_q_idx = len(sub_text)
-        
-        strength_block = sub_text[:next_q_idx]
-        lines = re.findall(r"[·-]\s*(.*)", strength_block)
-        data["comments"]["strength"] = [l.strip() for l in lines if len(l.strip()) > 2][:5]
+    # 강점 추출
+    if q_strength in text:
+        start = text.find(q_strength)
+        end = text.find(q_weakness) if q_weakness in text else len(text)
+        block = text[start:end]
+        # · 로 시작하는 줄 추출
+        lines = re.findall(r"[·]\s*(.*)", block)
+        data["comments"]["strength"] = [l.strip() for l in lines if not l.strip().endswith('?')]
 
-    # 보완점
-    if "보완해야 할 점은 무엇입니까" in text:
-        start_idx = text.find("보완해야 할 점은 무엇입니까")
-        sub_text = text[start_idx:]
-        next_q_idx = sub_text.find("장애요인") # 보통 다음 섹션이 장애요인
-        if next_q_idx == -1: next_q_idx = len(sub_text)
-        
-        weakness_block = sub_text[:next_q_idx]
-        lines = re.findall(r"[·-]\s*(.*)", weakness_block)
-        data["comments"]["weakness"] = [l.strip() for l in lines if len(l.strip()) > 2][:5]
+    # 보완점 추출
+    if q_weakness in text:
+        start = text.find(q_weakness)
+        end = text.find(q_obstacle) if q_obstacle in text else len(text)
+        block = text[start:end]
+        lines = re.findall(r"[·]\s*(.*)", block)
+        data["comments"]["weakness"] = [l.strip() for l in lines if not l.strip().endswith('?')]
 
     return data
 
-# --- 4. 통합 분석 함수 ---
+# --- 통합 분석 함수 ---
 def analyze_reports(l_file, o_file):
-    with st.spinner('PDF 리포트를 정밀 분석 중입니다...'):
+    with st.spinner('PDF 데이터를 정밀 분석 중입니다...'):
         l_text = extract_text_from_pdf(l_file)
         o_text = extract_text_from_pdf(o_file)
         
@@ -231,11 +239,20 @@ def analyze_reports(l_file, o_file):
         l_data = parse_leadership_report(l_text)
         o_data = parse_oei_report(o_text)
         
+        # 데이터가 너무 없으면(파싱 실패) None 반환
+        if not l_data['details'] and not o_data['stages']:
+            st.error("리포트 형식을 인식하지 못했습니다. 올바른 PDF 파일인지 확인해주세요.")
+            return None
+            
         return {"leadership": l_data, "oei": o_data}
 
 # --- 사이드바 ---
 with st.sidebar:
     st.title("📂 리포트 업로드")
+    
+    if not OPENAI_API_KEY:
+        st.warning("⚠️ OpenAI API Key가 설정되지 않았습니다. AI 코칭 기능을 사용할 수 없습니다.")
+        
     leadership_file = st.file_uploader("1. 리더십 진단 보고서 (PDF)", type="pdf")
     oei_file = st.file_uploader("2. 조직효과성(OEI) 보고서 (PDF)", type="pdf")
     
@@ -246,13 +263,12 @@ with st.sidebar:
 
 # --- 메인 로직 ---
 
-# Session State 초기화
 if "analyzed_data" not in st.session_state:
     st.session_state.analyzed_data = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 파일 업로드 시 분석
+# 파일 업로드 및 분석 실행
 if leadership_file and oei_file and st.session_state.analyzed_data is None:
     result = analyze_reports(leadership_file, oei_file)
     if result:
@@ -264,15 +280,19 @@ if leadership_file and oei_file and st.session_state.analyzed_data is None:
             welcome_text = "반갑습니다, 팀장님. 리포트 분석이 완료되었습니다."
             
             if gaps:
-                main_issue = gaps[0]['category']
-                gtype = "과소평가(숨겨진 강점)" if gaps[0]['type'] == 'Underestimation' else "과대평가(맹점)"
-                welcome_text += f"\n\n분석 결과, **'{main_issue}'** 항목에서 본인과 구성원의 인식 차이({gtype})가 발견되었습니다. 이에 대해 어떻게 생각하시나요?"
+                # 가장 큰 Gap 찾기
+                max_gap_item = max(gaps, key=lambda x: abs(x['self'] - x['team']))
+                issue = max_gap_item['category']
+                type_desc = "과소평가(숨겨진 강점)" if max_gap_item['type'] == 'Underestimation' else "과대평가(인식의 맹점)"
+                
+                welcome_text += f"\n\n분석 결과, **'{issue}'** 항목에서 본인과 구성원의 인식 차이({type_desc})가 가장 두드러집니다.\n\n이 결과에 대해 어떻게 생각하시나요?"
             else:
-                welcome_text += "\n\n리더님과 구성원의 인식이 전반적으로 잘 일치합니다. 현재 가장 고민되는 팀 운영 이슈는 무엇인가요?"
+                welcome_text += "\n\n리더님과 구성원의 인식이 전반적으로 잘 일치합니다. 현재 팀 운영에서 가장 고민되는 부분은 무엇인가요?"
                 
             st.session_state.messages.append({"role": "assistant", "content": welcome_text})
 
 # --- 화면 렌더링 ---
+
 if st.session_state.analyzed_data is None:
     st.title("🏆 AI 리더십 코칭")
     st.info("왼쪽 사이드바에서 두 개의 진단 보고서(PDF)를 업로드해주세요.")
@@ -319,6 +339,9 @@ else:
         st.subheader("리더십 역량 상세")
         df_l = pd.DataFrame(data['leadership']['details'])
         if not df_l.empty:
+            # 점수 차이(Gap) 계산
+            df_l['gap'] = df_l['self'] - df_l['group']
+            
             fig3 = go.Figure()
             fig3.add_trace(go.Bar(x=df_l['category'], y=df_l['self'], name='본인'))
             fig3.add_trace(go.Bar(x=df_l['category'], y=df_l['group'], name='구성원'))
@@ -379,14 +402,14 @@ else:
     with tabs[3]:
         st.subheader("💬 AI 코칭 대화")
         
-        # 채팅 히스토리
+        # 채팅 히스토리 표시
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
         
-        # 입력창
+        # 사용자 입력 처리
         if prompt := st.chat_input("답변을 입력해주세요..."):
-            # 1. 사용자 메시지 추가 및 표시
+            # 1. 사용자 메시지 추가
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.write(prompt)
@@ -401,16 +424,17 @@ else:
                     당신은 SK그룹의 리더십 전문 코치입니다.
                     사용자의 진단 데이터: {data}
                     
-                    특히 다음 사항을 중심으로 코칭하세요:
-                    1. 인식 차이 항목: {data['oei']['gaps']}
-                    2. 구성원들이 지적한 보완점: {data['oei']['comments']['weakness']}
+                    [코칭 목표]
+                    사용자가 자신의 리더십 스타일과 팀 상황을 객관적으로 인식하고, 구체적인 개선 행동(Action Plan)을 수립하도록 돕습니다.
                     
-                    대화 가이드:
-                    - GROW 모델(Goal -> Reality -> Options -> Will)을 따르세요.
-                    - 한번에 하나씩 질문하여 사용자가 스스로 생각하게 유도하세요.
-                    - 공감하는 태도로 대화하세요.
+                    [대화 가이드]
+                    1. 인식 차이 항목({data['oei']['gaps']})과 구성원 보완점({data['oei']['comments']['weakness']})을 근거로 질문하세요.
+                    2. GROW 모델(Goal -> Reality -> Options -> Will) 단계에 맞춰 대화를 진행하세요.
+                    3. 한 번에 하나의 질문만 짧게 던지세요.
+                    4. 상대방의 말에 공감한 뒤 질문하세요.
                     """
                     
+                    # 메시지 컨텍스트 구성
                     api_messages = [{"role": "system", "content": system_msg}]
                     for m in st.session_state.messages:
                         api_messages.append({"role": m["role"], "content": m["content"]})
@@ -426,6 +450,6 @@ else:
                     st.session_state.messages.append({"role": "assistant", "content": response})
                     
                 except Exception as e:
-                    st.error(f"AI 응답 오류: {e}")
+                    st.error(f"AI 연결 오류: {e}")
             else:
-                st.warning("API Key가 없어서 AI가 응답할 수 없습니다.")
+                st.warning("API Key가 설정되지 않아 AI가 응답할 수 없습니다. 관리자에게 문의해주세요.")
