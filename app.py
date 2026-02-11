@@ -19,32 +19,15 @@ try:
 except (FileNotFoundError, KeyError):
     OPENAI_API_KEY = None
 
-# --- 역량 그룹 정의 (사용자 요청 기준) ---
+# --- 역량 그룹 정의 ---
 COMPETENCY_GROUPS = {
-    "SKMS에 대한 확신과 열정": [
-        "SKMS에 대한 확신",
-        "구성원/이해관계자 행복 추구",
-        "패기/솔선수범",
-        "Integrity"
-    ],
-    "혁신적 전략 수립": [
-        "전략적 Insight",
-        "담당 조직 변화 Design",
-        "비전 공유/지속적 변화 추진"
-    ],
-    "과감한 돌파와 실행": [
-        "SUPEX 목표 설정",
-        "내·외부 폭넓은 협업", 
-        "신속한 실행 및 성과 창출"
-    ],
-    "VWBE 문화구축": [
-        "구성원 VWBE환경 조성 활동 지원",
-        "신뢰 기반의 협력 촉진",
-        "패기 인재 인정/육성"
-    ]
+    "SKMS에 대한 확신과 열정": ["SKMS에 대한 확신", "구성원/이해관계자 행복 추구", "패기/솔선수범", "Integrity"],
+    "혁신적 전략 수립": ["전략적 Insight", "담당 조직 변화 Design", "비전 공유/지속적 변화 추진"],
+    "과감한 돌파와 실행": ["SUPEX 목표 설정", "내·외부 폭넓은 협업", "신속한 실행 및 성과 창출"],
+    "VWBE 문화구축": ["구성원 VWBE환경 조성 활동 지원", "신뢰 기반의 협력 촉진", "패기 인재 인정/육성"]
 }
 
-# --- 데이터 로드 및 전처리 함수 ---
+# --- 데이터 로드 및 전처리 ---
 @st.cache_data
 def load_data(file):
     try:
@@ -58,30 +41,36 @@ def load_data(file):
         return None
 
 def normalize_text(text):
-    """텍스트 매칭을 위해 공백과 특수문자를 제거하는 헬퍼 함수"""
     return re.sub(r'[\s\·\.\,\-\_]', '', str(text)).lower()
 
 def parse_columns(df):
     """
-    컬럼명을 분석하여 구성원 응답, 동료 응답, 텍스트 데이터 등을 분류합니다.
+    컬럼명을 분석하여 점수(Numeric)와 주관식(Text)을 구분하고,
+    대상(구성원/동료)과 연도를 분류합니다.
     """
-    member_scores = {} # {year: [col1, col2...]}
-    peer_scores = {}   # {year: [col1, col2...]}
-    text_cols = {}     # {year: [col1, col2...]}
+    member_scores = {} 
+    peer_scores = {}   
+    member_texts = {}  # 구성원 주관식
+    peer_texts = {}    # 동료 주관식
     meta_cols = []
     
     peer_pattern = re.compile(r"^(.*)_동료_(\d{2}년)$")
     member_pattern = re.compile(r"^(.*)_(\d{2}년)$")
     
     for col in df.columns:
+        # 1. 동료 데이터 확인
         peer_match = peer_pattern.match(col)
         if peer_match:
             year = peer_match.group(2)
             if pd.api.types.is_numeric_dtype(df[col]):
                 if year not in peer_scores: peer_scores[year] = []
                 peer_scores[year].append(col)
+            else:
+                if year not in peer_texts: peer_texts[year] = []
+                peer_texts[year].append(col)
             continue
             
+        # 2. 구성원 데이터 확인
         member_match = member_pattern.match(col)
         if member_match:
             year = member_match.group(2)
@@ -89,47 +78,38 @@ def parse_columns(df):
                 if year not in member_scores: member_scores[year] = []
                 member_scores[year].append(col)
             else:
-                if year not in text_cols: text_cols[year] = []
-                text_cols[year].append(col)
+                if year not in member_texts: member_texts[year] = []
+                member_texts[year].append(col)
         else:
             meta_cols.append(col)
             
-    return meta_cols, member_scores, peer_scores, text_cols
+    return meta_cols, member_scores, peer_scores, member_texts, peer_texts
 
-# --- [MODIFIED] 커스텀 메트릭 함수 (화살표 옵션 추가, 다크모드 호환성 개선) ---
 def custom_metric(label, value, delta=None, delta_color="normal", show_arrow=False):
-    """
-    HTML/CSS를 사용하여 지표를 표시합니다.
-    하드코딩된 색상을 제거하여 다크모드에서도 잘 보이게 합니다.
-    """
+    """HTML 커스텀 메트릭"""
     delta_html = ""
     if delta:
         try:
             match = re.search(r"([+-]?\d+\.?\d*)", str(delta))
             if match:
                 delta_val = float(match.group(1))
-                
-                # 색상 결정 (Streamlit 기본 Metric 색상과 유사하게 설정)
-                # Green: #09ab3b, Red: #ff2b2b
-                text_color = "inherit" 
+                text_color = "#666"
                 arrow_char = ""
                 
                 if delta_val > 0:
-                    if delta_color == "normal": text_color = "#09ab3b" # Green
-                    elif delta_color == "inverse": text_color = "#ff2b2b" # Red
+                    if delta_color == "normal": text_color = "#09ab3b"
+                    elif delta_color == "inverse": text_color = "#ff2b2b"
                     arrow_char = "↑" if show_arrow else ""
                 elif delta_val < 0:
-                    if delta_color == "normal": text_color = "#ff2b2b" # Red
-                    elif delta_color == "inverse": text_color = "#09ab3b" # Green
+                    if delta_color == "normal": text_color = "#ff2b2b"
+                    elif delta_color == "inverse": text_color = "#09ab3b"
                     arrow_char = "↓" if show_arrow else ""
                 
-                # 델타 값 포맷팅
                 delta_str = f"{arrow_char} {delta}" if show_arrow else f"{delta}"
                 delta_html = f'<span style="color: {text_color}; font-size: 1rem; margin-left: 8px; font-weight: 600;">{delta_str}</span>'
         except:
-            delta_html = f'<span style="font-size: 1rem; margin-left: 8px; opacity: 0.7;">{delta}</span>'
+            delta_html = f'<span style="color: #666; font-size: 1rem; margin-left: 8px;">{delta}</span>'
 
-    # CSS에서 color를 명시하지 않음으로써 테마 색상을 따르게 함
     html_code = f"""
     <div style="display: flex; flex-direction: column; margin-bottom: 1.5rem;">
         <span style="font-size: 1rem; font-weight: 500; margin-bottom: 4px; opacity: 0.8;">{label}</span>
@@ -141,11 +121,10 @@ def custom_metric(label, value, delta=None, delta_color="normal", show_arrow=Fal
     """
     st.markdown(html_code, unsafe_allow_html=True)
 
-# --- 사이드바: 업로드 및 대상자 선택 ---
+# --- 사이드바 ---
 with st.sidebar:
     st.title("👑 임원 리더십 코칭")
     st.info("3개년 리더십 진단 결과(Excel)를 업로드하세요.")
-    
     uploaded_file = st.file_uploader("엑셀 파일 업로드", type=["xlsx", "csv"])
     
     selected_leader = None
@@ -165,11 +144,11 @@ with st.sidebar:
 # --- 메인 로직 ---
 if df is not None and selected_leader_name:
     # 1. 컬럼 파싱
-    meta_cols, member_map, peer_map, text_map = parse_columns(df)
+    meta_cols, member_map, peer_map, member_text_map, peer_text_map = parse_columns(df)
     sorted_years = sorted(member_map.keys())
     latest_year = sorted_years[-1]
     
-    # 2. 역량 매핑 및 데이터 추출
+    # 2. 역량 매핑 & 점수 추출
     raw_competencies = [col.replace(f"_{latest_year}", "") for col in member_map[latest_year]]
     norm_comp_map = {normalize_text(c): c for c in raw_competencies}
     
@@ -180,7 +159,6 @@ if df is not None and selected_leader_name:
         year_group_data = {}
         year_detail_data = {}
         
-        # 상세 점수 추출
         for col in member_map[year]:
             if "_동료_" in col: continue
             comp_name = col.replace(f"_{year}", "")
@@ -191,30 +169,25 @@ if df is not None and selected_leader_name:
                 year_detail_data[comp_name] = 0
         detailed_scores[year] = year_detail_data
         
-        # 그룹별 평균 계산
         for group_name, sub_items in COMPETENCY_GROUPS.items():
             scores = []
             for item in sub_items:
                 norm_item = normalize_text(item)
                 target_col = None
-                if item in year_detail_data:
-                    target_col = item
+                if item in year_detail_data: target_col = item
                 elif norm_item in norm_comp_map and norm_comp_map[norm_item] in year_detail_data:
                     target_col = norm_comp_map[norm_item]
                 
                 if target_col:
                     val = year_detail_data[target_col]
-                    if val > 0:
-                        scores.append(val)
+                    if val > 0: scores.append(val)
             
-            if scores:
-                year_group_data[group_name] = sum(scores) / len(scores)
-            else:
-                year_group_data[group_name] = 0.0
+            if scores: year_group_data[group_name] = sum(scores) / len(scores)
+            else: year_group_data[group_name] = 0.0
         
         grouped_scores[year] = year_group_data
 
-    # Common calculations
+    # Common Stats
     avg_scores = {}
     for y in sorted_years:
         vals = [v for v in detailed_scores[y].values() if v > 0]
@@ -222,7 +195,6 @@ if df is not None and selected_leader_name:
 
     curr_score = avg_scores[latest_year]
     prev_year = sorted_years[-2] if len(sorted_years) > 1 else None
-    
     delta_total = (curr_score - avg_scores[prev_year]) if prev_year else 0
     
     latest_series = pd.Series(detailed_scores[latest_year])
@@ -234,7 +206,6 @@ if df is not None and selected_leader_name:
     else:
         top_comp, bot_comp = "-", "-"
 
-    # 개별 역량 Delta 계산 함수
     def get_delta_str(comp_name):
         if not prev_year: return None
         prev = detailed_scores[prev_year].get(comp_name, 0)
@@ -243,145 +214,142 @@ if df is not None and selected_leader_name:
             return f"{curr - prev:+.1f}"
         return None
 
-    # --- UI 탭 구성 ---
-    st.title(f"📊 {selected_leader_name} 님 리더십 진단 분석")
+    # --- UI ---
+    st.title(f"📊 {selected_leader_name} 님 리더십 진단 분석 (3개년)")
     
     tab1, tab2, tab3 = st.tabs(["📈 종합 대시보드", "📝 주관식 심층분석", "🤖 AI 코칭"])
     
-    # [TAB 1] 종합 대시보드
+    # [TAB 1] Overview
     with tab1:
         st.subheader("Overview (구성원 응답 기준)")
-        
         m1, m2, m3 = st.columns(3)
-        
         with m1:
-            delta_str = f"{delta_total:+.2f} ({prev_year} 대비)" if prev_year else None
-            # 종합 점수: 화살표 표시 (show_arrow=True)
-            custom_metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", delta_str, show_arrow=True)
-            
+            d_str = f"{delta_total:+.2f} ({prev_year} 대비)" if prev_year else None
+            custom_metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", d_str, show_arrow=True)
         with m2:
             d_top = get_delta_str(top_comp)
             val_top = f"{latest_series[top_comp]:.1f}" if top_comp != "-" else "-"
-            # 최고 강점: 화살표 없이 색상만 (show_arrow=False)
             custom_metric("최고 강점", top_comp, f"{val_top} ({d_top})" if d_top else val_top, delta_color="normal", show_arrow=False)
-            
         with m3:
             d_bot = get_delta_str(bot_comp)
             val_bot = f"{latest_series[bot_comp]:.1f}" if bot_comp != "-" else "-"
-            # 보완 필요: 화살표 없이 색상만 (show_arrow=False)
             custom_metric("보완 필요", bot_comp, f"{val_bot} ({d_bot})" if d_bot else val_bot, delta_color="normal", show_arrow=False)
         
         st.divider()
-        
-        # 차트 영역
         c1, c2 = st.columns([1, 1])
-        
         with c1:
             st.markdown("##### 📅 3개년 종합 점수 추이")
-            trend_df = pd.DataFrame({
-                "Year": sorted_years,
-                "Score": [avg_scores[y] for y in sorted_years]
-            })
-            # text="Score" 추가: 점수 레이블 표시
+            trend_df = pd.DataFrame({"Year": sorted_years, "Score": [avg_scores[y] for y in sorted_years]})
             fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5], text="Score")
             fig_line.update_traces(line_color='#2563eb', line_width=3, textposition="top center", texttemplate='%{text:.2f}')
             st.plotly_chart(fig_line, use_container_width=True)
-            
         with c2:
             st.markdown(f"##### 🕸️ 리더십 영역별 변화 ({latest_year})")
             fig_radar = go.Figure()
             colors = ['#cbd5e1', '#94a3b8', '#2563eb'] 
-            
-            categories = list(COMPETENCY_GROUPS.keys())
-            
+            cats = list(COMPETENCY_GROUPS.keys())
             for i, year in enumerate(sorted_years):
-                vals = [grouped_scores[year].get(cat, 0) for cat in categories]
+                vals = [grouped_scores[year].get(cat, 0) for cat in cats]
                 vals += [vals[0]]
-                cats_closed = categories + [categories[0]]
-                
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=vals,
-                    theta=cats_closed,
-                    fill='toself' if year == latest_year else 'none',
-                    name=year,
-                    line_color=colors[i] if i < 3 else 'black'
-                ))
-            
+                fig_radar.add_trace(go.Scatterpolar(r=vals, theta=cats+[cats[0]], fill='toself' if year==latest_year else 'none', name=year, line_color=colors[i] if i<3 else 'black'))
             fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), showlegend=True)
             st.plotly_chart(fig_radar, use_container_width=True)
 
-    # [TAB 2] 주관식 심층분석
+    # [TAB 2] 주관식 심층분석 (3가지 프레임워크 적용)
     with tab2:
-        st.subheader("📝 주관식 피드백 분석")
+        st.subheader("📝 주관식 피드백 심층 분석")
         
-        comments_text = ""
-        for year in reversed(sorted_years):
-            if year in text_map:
-                comments_text += f"\n[{year} 피드백]\n"
-                for col in text_map[year]:
+        # 데이터 수집 (연도별 / 대상별)
+        data_context = ""
+        
+        # 1. 구성원 응답 모음
+        data_context += "### [1] 구성원 주관식 응답 (3개년)\n"
+        for year in sorted_years:
+            data_context += f"<{year}년 구성원>\n"
+            if year in member_text_map:
+                for col in member_text_map[year]:
                     val = leader_data[col]
                     if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
                         clean_col = col.replace(f"_{year}", "")
-                        comments_text += f"- {clean_col}: {val}\n"
+                        data_context += f"- {clean_col}: {val}\n"
         
-        if not comments_text.strip():
-            st.warning("분석할 주관식 데이터가 없습니다.")
-        else:
-            if st.button("🤖 AI 심층 분석 실행"):
-                if not OPENAI_API_KEY:
-                    st.error("API Key가 필요합니다.")
-                else:
-                    with st.spinner("AI 분석 중..."):
-                        try:
-                            client = openai.OpenAI(api_key=OPENAI_API_KEY)
-                            prompt = f"""
-                            당신은 임원 리더십 코치입니다. 3년치 주관식 데이터를 분석하여 요약해주세요.
-                            
-                            1. **핵심 강점 (Top 3)**
-                            2. **주요 보완점 및 Risk**
-                            3. **연도별 변화 흐름**
-                            
-                            [데이터]
-                            {comments_text}
-                            """
-                            res = client.chat.completions.create(
-                                model="gpt-4o",
-                                messages=[{"role": "user", "content": prompt}]
-                            )
-                            analysis = res.choices[0].message.content
-                            st.success("분석 완료")
-                            st.markdown(analysis)
-                            st.session_state['qualitative_analysis'] = analysis
-                        except Exception as e:
-                            st.error(f"오류: {e}")
-            
-            with st.expander("원본 데이터 보기"):
-                st.text(comments_text)
+        # 2. 동료 응답 모음
+        data_context += "\n### [2] 동료 임원 주관식 응답 (3개년)\n"
+        for year in sorted_years:
+            data_context += f"<{year}년 동료>\n"
+            if year in peer_text_map:
+                for col in peer_text_map[year]:
+                    val = leader_data[col]
+                    if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
+                        clean_col = col.replace(f"_동료_{year}", "")
+                        data_context += f"- {clean_col}: {val}\n"
+        
+        # 3. 객관식 점수 요약 (변화 원인 추적용)
+        data_context += "\n### [3] 객관식 점수 변화 추이\n"
+        data_context += f"- 종합 점수 변화: {avg_scores}\n"
+        data_context += f"- {latest_year}년 최고 강점: {top_comp}, 보완 필요: {bot_comp}\n"
+
+        if st.button("🤖 AI 심층 분석 실행 (3-Point Analysis)"):
+            if not OPENAI_API_KEY:
+                st.error("API Key가 필요합니다.")
+            else:
+                with st.spinner("AI가 3년치 데이터와 정성/정량 데이터를 통합 분석 중입니다..."):
+                    try:
+                        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                        prompt = f"""
+                        당신은 대기업 임원 리더십 평가 전문가입니다. 
+                        제공된 3년치 '객관식 점수'와 '주관식 코멘트(구성원/동료)'를 통합 분석하여 아래 3가지 항목으로 심층 리포트를 작성해주세요.
+
+                        1. **3개년 주관식 키워드 주요 변화**
+                           - 연도별로 주관식에서 자주 등장하는 긍정/부정 키워드가 어떻게 달라졌는지 분석하세요.
+                           - 예: "22년에는 '추진력'이 강조되었으나, 24년에는 '소통 부재'가 키워드로 부상함"
+
+                        2. **변화 원인 추적 (정량+정성 통합)**
+                           - 객관식 점수의 상승/하락 원인을 주관식 코멘트에서 찾아 연결하세요.
+                           - 예: "전략적 Insight 점수가 하락한 원인은, 구성원 코멘트에서 '구체적 비전 공유 부족'이 반복 언급된 것과 연관됨"
+
+                        3. **구성원 vs 동료 인식 비교**
+                           - 동일한 리더십에 대해 구성원과 동료 임원이 바라보는 시각 차이(Gap)를 분석하세요.
+                           - 예: "동료들은 '협업 능력'을 높게 평가하나, 구성원들은 '팀 내 소통'을 아쉬워하는 경향이 있음"
+
+                        [분석 대상 데이터]
+                        {data_context}
+                        """
+                        
+                        res = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[{"role": "user", "content": prompt}]
+                        )
+                        analysis = res.choices[0].message.content
+                        st.success("분석 완료")
+                        st.markdown(analysis)
+                        st.session_state['qualitative_analysis'] = analysis # 코칭 탭 공유용
+                    except Exception as e:
+                        st.error(f"오류 발생: {e}")
+        
+        with st.expander("원본 데이터 보기"):
+            st.text(data_context)
 
     # [TAB 3] AI 코칭
     with tab3:
         st.subheader("💬 AI 리더십 코칭")
-        
         chat_container = st.container()
         
         if "messages" not in st.session_state:
             st.session_state.messages = []
-            
-            welcome = f"{selected_leader_name} 임원님, 반갑습니다. 3년치 리더십 데이터 분석을 완료했습니다.\n\n"
-            welcome += f"최근({latest_year}) 구성원 평가 기준 종합 점수는 **{curr_score:.2f}점**입니다. "
-            if delta_total > 0: welcome += "전년 대비 상승했습니다. 📈\n\n"
-            elif delta_total < 0: welcome += "전년 대비 다소 하락했습니다. 📉\n\n"
+            welcome = f"{selected_leader_name} 임원님, 반갑습니다. 3년치 리더십 분석을 완료했습니다.\n\n"
+            welcome += f"최근({latest_year}) 종합 점수는 **{curr_score:.2f}점**입니다. "
+            if delta_total > 0: welcome += "전년 대비 상승세입니다. 📈\n\n"
+            elif delta_total < 0: welcome += "전년 대비 하락세가 관찰됩니다. 📉\n\n"
             
             welcome += "현재 가장 고민되시는 리더십 이슈는 무엇인가요? 편하게 말씀해 주시면 대화를 시작하겠습니다.\n\n"
-            
             welcome += """---
-            💡 **추가로 논의할 수 있는 주제들** (아래 내용을 복사해서 질문하시면 심도 있게 다뤄드립니다)
-            * 📚 **이론 학습:** 현재 나의 약점과 관련된 최신 리더십 이론이나 아티클을 추천해 주세요.
-            * 🎬 **영상 추천:** 리더십 개발에 도움이 될 만한 TED 강연이나 교육 영상을 추천해 주세요.
-            * 🗓️ **W/S 제안:** 팀원들과 소통을 강화하기 위한 워크숍 아젠다를 제안해 주세요.
-            (질문 중 원하는 내용을 복사 붙여넣기 하시면 추가로 진행하겠습니다)
+            💡 **추가 제안 (클릭하여 복사 후 질문해주세요)**
+            * 📚 **이론 학습:** 현재 약점과 관련된 최신 리더십 이론 추천
+            * 🎬 **영상 추천:** 리더십 개발을 위한 TED 강연 추천
+            * 🗓️ **W/S 제안:** 조직문화 개선을 위한 워크숍 아젠다 제안
+            (원하시는 내용을 질문해 주시면 상세히 안내해 드립니다)
             """
-            
             st.session_state.messages.append({"role": "assistant", "content": welcome})
             
         with chat_container:
@@ -398,25 +366,17 @@ if df is not None and selected_leader_name:
             if OPENAI_API_KEY:
                 try:
                     client = openai.OpenAI(api_key=OPENAI_API_KEY)
-                    qual_context = st.session_state.get('qualitative_analysis', "")
+                    qual_context = st.session_state.get('qualitative_analysis', "주관식 분석 결과 없음")
                     
                     sys_msg = f"""
-                    당신은 대기업 임원 전용 전문 리더십 코치(Executive Coach)입니다.
-                    대상: {selected_leader_name} 임원
+                    당신은 임원 전용 리더십 코치입니다. 대상: {selected_leader_name}
+                    [데이터] 점수: {avg_scores}, 강점: {top_comp}, 약점: {bot_comp}
+                    [주관식 분석] {qual_context}
                     
-                    [정량 데이터]
-                    - 3년치 점수 추이: {avg_scores}
-                    - 최신 강점: {top_comp}, 약점: {bot_comp}
-                    
-                    [정성 피드백 요약]
-                    {qual_context}
-                    
-                    [대화 및 응답 가이드]
-                    1. **전문가 페르소나:** 실제 코칭 세션처럼 정중하고 깊이 있는 통찰을 제공하세요. 단순한 답변보다는 사용자의 생각을 확장시키는 질문을 던지세요.
-                    2. **추가 제안 (옵션):** 사용자가 특정 약점이나 개발 포인트에 대해 고민할 때만, 관련된 이론 학습, 영상 추천, 워크숍 일정 등을 제안하세요. (매번 할 필요 없음)
-                    3. **Next Step 질문 (필수):** 답변의 마지막에는 항상 코칭 기법(GROW, 질문법 등)을 활용하여 상황에 맞는 심화 질문을 던지세요.
-                       - 문구 예시: (해당 질문에 답을 해주시면 다음 단계로 이어나가 보겠습니다)
-                       - 주의: 구체적으로 어떤 코칭 모델을 썼는지는 밝히지 마세요.
+                    [가이드]
+                    1. **전문가 페르소나:** 깊이 있는 통찰 제공.
+                    2. **추가 제안:** 필요 시 이론/영상/워크숍 추천.
+                    3. **Next Step:** 답변 끝에 항상 코칭 질문(GROW 등)을 던져 대화를 이어나갈 것. (문구: 해당 질문에 답을 해주시면 다음 단계로 이어나가 보겠습니다)
                     """
                     
                     msgs = [{"role": "system", "content": sys_msg}] + st.session_state.messages
@@ -430,4 +390,3 @@ if df is not None and selected_leader_name:
                     st.error(f"오류: {e}")
             else:
                 st.warning("API Key 미설정")
-
