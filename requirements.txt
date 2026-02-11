@@ -1,6 +1,5 @@
 streamlit
 pandas
 plotly
-pdfplumber
 openai
-numpy
+openpyxl
