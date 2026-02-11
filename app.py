@@ -34,7 +34,7 @@ def extract_text_from_pdf(file):
         st.error(f"PDF 읽기 오류: {e}")
         return ""
 
-# --- 1. 리더십 진단 파싱 로직 (수정됨) ---
+# --- 1. 리더십 진단 파싱 로직 (정밀 수정) ---
 def parse_leadership_report(text):
     data = {
         "summary": 0.0,
@@ -42,15 +42,28 @@ def parse_leadership_report(text):
         "comments": {"boss": [], "members": []}
     }
     
-    # 공백 제거 텍스트 (검색용)
+    # 1. 텍스트 전처리 (모든 공백 제거)
     clean_text = re.sub(r'\s+', '', text)
     
-    # [핵심 수정] 섹션 자르기 로직 제거
-    # 기존 split 로직이 목차(TOC)에서 텍스트를 잘라버리는 오류가 있어,
-    # 전체 텍스트에서 검색하되 Regex 패턴을 사용하여 정확한 데이터만 추출합니다.
-    # 리더십 진단 점수는 '항목명' 뒤에 '본인점수', '그룹점수'가 나오는 패턴이 유일하므로 전체 검색이 안전합니다.
+    # 2. 검색 범위 설정 [핵심 수정]
+    # '문항별 점수' 텍스트는 목차에도 나오므로, 실제 표 헤더인 '긍정/부정응답분포'를 찾습니다.
+    # 이 헤더는 점수표가 있는 페이지(12, 13, 14...)에만 등장합니다.
+    start_anchor = "긍정/부정응답분포"
+    start_idx = clean_text.find(start_anchor)
+    
+    if start_idx != -1:
+        # 헤더보다 조금 앞(항목명)부터 시작, '주관식' 전까지
+        # 항목명이 헤더보다 먼저 나오므로 넉넉하게 -300자 앞에서부터 시작
+        search_start = max(0, start_idx - 300)
+        target_section = clean_text[search_start:]
+        
+        if "주관식응답결과" in target_section:
+            target_section = target_section.split("주관식응답결과")[0]
+    else:
+        # 앵커를 못 찾으면 전체 텍스트 사용 (Fallback)
+        target_section = clean_text
 
-    # 항목 매핑
+    # 3. 항목 매핑 (리포트의 정확한 텍스트 기준)
     items_map = {
         "SKMS에대한확신": "SKMS 확신",
         "패기/솔선수범": "패기/솔선수범",
@@ -69,12 +82,11 @@ def parse_leadership_report(text):
     scores = []
     
     for pdf_key, label in items_map.items():
-        # 패턴: 항목명 + (중간 텍스트) + 본인점수(x.x) + (중간) + 그룹점수(x.x)
+        # 패턴: 항목명 ... 본인점수(x.x) ... 그룹점수(x.x)
         # 예: ...SKMS에대한확신...4.5...4.3...
-        # 목차에는 점수가 없으므로(페이지 번호만 있음), 점수 패턴([0-5]\.\d)을 포함하면 목차는 자연스럽게 걸러집니다.
         try:
             pattern = re.compile(rf"{re.escape(pdf_key)}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
-            match = pattern.search(clean_text)
+            match = pattern.search(target_section)
             
             if match:
                 self_val = float(match.group(1))
@@ -93,45 +105,30 @@ def parse_leadership_report(text):
     if scores:
         data["summary"] = round(sum(scores) / len(scores), 1)
     
-    # 주관식 코멘트 추출
-    # (원본 텍스트 text 사용)
+    # 4. 주관식 코멘트 추출 (원본 텍스트 사용)
     if "상사 응답" in text:
         try:
-            # 본문의 "상사 응답" 위치 찾기 (목차 제외)
-            # 목차의 "상사 응답"은 뒤에 점수나 내용이 없으므로, 내용이 있는 뒤쪽을 찾아야 함
-            # rfind(오른쪽에서 찾기)를 사용하거나, "주관식 응답 결과" 이후를 찾음
-            start_keyword = "상사 응답"
-            indices = [m.start() for m in re.finditer(start_keyword, text)]
-            
-            # 보통 마지막이나 마지막에서 두 번째가 실제 본문임
-            if indices:
-                real_start = indices[-1] 
-                end_keyword = "구성원 응답"
-                end = text.find(end_keyword, real_start)
-                
-                if end != -1:
-                    block = text[real_start:end]
-                    lines = re.findall(r"[·-]\s*(.*)", block)
-                    data["comments"]["boss"] = [l.strip() for l in lines if len(l.strip()) > 5]
+            start = text.find("상사 응답")
+            end = text.find("구성원 응답")
+            block = text[start:end]
+            lines = re.findall(r"[·-]\s*(.*)", block)
+            data["comments"]["boss"] = [l.strip() for l in lines if len(l.strip()) > 5]
         except: pass
 
     if "구성원 응답" in text:
         try:
-            start_keyword = "구성원 응답"
-            indices = [m.start() for m in re.finditer(start_keyword, text)]
-            
-            if indices:
-                # 구성원 응답은 여러 번 나올 수 있으므로, 상사 응답 이후의 첫 번째를 찾거나
-                # 가장 긴 텍스트 블록을 가진 섹션을 찾음. 
-                # 여기서는 가장 마지막 '구성원 응답' 섹션 근처를 탐색 (주관식 섹션)
-                real_start = indices[-1]
-                # 만약 이게 너무 뒤라면(페이지 끝), 그 앞의 것을 선택
-                if real_start > len(text) * 0.9 and len(indices) > 1:
-                    real_start = indices[-2]
-
-                block = text[real_start:]
-                lines = re.findall(r"[·-]\s*(.*)", block)
+            # 주관식 섹션의 '구성원 응답' 찾기 (목차 제외)
+            # 보통 파일의 뒤쪽에 위치함
+            start_candidates = [m.start() for m in re.finditer("구성원 응답", text)]
+            if start_candidates:
+                start = start_candidates[-1] # 가장 마지막 등장 위치
+                # 혹시 너무 뒤면(마지막 페이지 등) 그 앞일 수 있음. 
+                # 일단 주관식 섹션이 16p~ 이므로 뒤쪽이 맞음.
                 
+                end = text.find("Review Questions") if "Review Questions" in text else len(text)
+                block = text[start:end]
+                
+                lines = re.findall(r"[·-]\s*(.*)", block)
                 clean_lines = []
                 for l in lines:
                     l = l.strip()
@@ -145,7 +142,7 @@ def parse_leadership_report(text):
 
     return data
 
-# --- 2. OEI 진단 파싱 로직 (수정됨) ---
+# --- 2. OEI 진단 파싱 로직 (정밀 수정) ---
 def parse_oei_report(text):
     data = {
         "summary": 0.0,
@@ -156,45 +153,51 @@ def parse_oei_report(text):
     
     clean_text = re.sub(r'\s+', '', text)
     
-    # 1. 종합 점수 추출 (리포트 상단 타이틀 부분)
+    # 1. 탐색 범위 제한 (요약 섹션 이후)
+    # 앞부분(Frame 설명 등)의 "Input", "Process" 텍스트 오탐지 방지
+    if "진단결과요약" in clean_text:
+        summary_idx = clean_text.find("진단결과요약")
+        search_area = clean_text[summary_idx:]
+    else:
+        search_area = clean_text
+
+    # 2. 종합 점수 추출
     # 패턴: 【조직 효과성 점수 4.6점】
-    match_total = re.search(r"조직효과성점수([0-5]\.\d)", clean_text)
+    match_total = re.search(r"조직효과성점수([0-5]\.\d)", search_area)
     if match_total:
         data["summary"] = float(match_total.group(1))
     
-    # 2. I-P-O 단계별 점수 추출 (Snapshot 섹션)
-    # Snapshot 섹션을 확실히 찾기 위해 'Snapshot' 키워드와 'Input' 키워드가 가까운 곳을 찾습니다.
-    # 혹은 '진단결과요약' 이후의 텍스트에서 검색
-    
-    if "진단결과요약" in clean_text:
-        target_section = clean_text.split("진단결과요약")[-1]
-    else:
-        target_section = clean_text
-
-    # Input (보통 제일 먼저 나오는 큰 숫자)
-    # 예: ...Input4.6...Process4.5...Output4.7...
-    # 주의: 표 안에 '조직관점Input' 등의 텍스트가 있어서 단순 Input 검색은 위험할 수 있음
-    # 하지만 Snapshot의 점수는 표보다 먼저 나옴.
-    
-    # Snapshot 점수 추출 시도 (순서대로)
-    # Input...숫자...Process...숫자...Output...숫자
-    ipo_pattern = re.search(r"Input.*?([0-5]\.\d).*?Process.*?([0-5]\.\d).*?Output.*?([0-5]\.\d)", target_section)
-    if ipo_pattern:
-        data["stages"].append({"stage": "Input", "score": float(ipo_pattern.group(1))})
-        data["stages"].append({"stage": "Process", "score": float(ipo_pattern.group(2))})
-        data["stages"].append({"stage": "Output", "score": float(ipo_pattern.group(3))})
-    else:
-        # 개별 검색 (Fallback)
-        m_input = re.search(r"Input.*?([0-5]\.\d)", target_section)
-        if m_input: data["stages"].append({"stage": "Input", "score": float(m_input.group(1))})
+    # 3. I-P-O 단계별 점수 추출 (Snapshot 섹션)
+    # Snapshot 섹션 내부에서만 검색
+    if "Snapshot" in search_area:
+        snapshot_area = search_area.split("Snapshot")[-1]
+        # 문항별 점수 나오기 전까지만
+        if "문항별점수" in snapshot_area:
+            snapshot_area = snapshot_area.split("문항별점수")[0]
         
-        m_process = re.search(r"Process.*?([0-5]\.\d)", target_section)
-        if m_process: data["stages"].append({"stage": "Process", "score": float(m_process.group(1))})
-        
-        m_output = re.search(r"Output.*?([0-5]\.\d)", target_section)
-        if m_output: data["stages"].append({"stage": "Output", "score": float(m_output.group(1))})
+        # Input
+        m_input = re.search(r"Input.*?([0-5]\.\d)", snapshot_area)
+        if m_input:
+            data["stages"].append({"stage": "Input", "score": float(m_input.group(1))})
+            
+        # Process
+        m_process = re.search(r"Process.*?([0-5]\.\d)", snapshot_area)
+        if m_process:
+            data["stages"].append({"stage": "Process", "score": float(m_process.group(1))})
+            
+        # Output
+        m_output = re.search(r"Output.*?([0-5]\.\d)", snapshot_area)
+        if m_output:
+            data["stages"].append({"stage": "Output", "score": float(m_output.group(1))})
 
-    # 3. Gap 분석 (항목별 점수)
+    # Fallback
+    if not data["stages"]:
+        for stage in ["Input", "Process", "Output"]:
+            match = re.search(rf"{stage}.*?([0-5]\.\d)", search_area)
+            if match:
+                data["stages"].append({"stage": stage, "score": float(match.group(1))})
+
+    # 4. Gap 분석 (항목별 점수)
     oei_items = [
         "명확한목표와업무방향", "목표달성을위한우선순위설정", "변화공감/지지",
         "자율적업무환경조성", "업무장애요인개선", "일하는방식의원칙", "일과삶의균형",
@@ -208,8 +211,9 @@ def parse_oei_report(text):
     ]
     
     for item in oei_items:
+        # 상세 점수는 뒷부분(문항별 점수)에 나옴
         pattern = re.compile(rf"{re.escape(item)}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
-        match = pattern.search(clean_text)
+        match = pattern.search(clean_text) # 전체에서 검색 (상세항목은 유니크함)
         
         if match:
             try:
@@ -231,7 +235,7 @@ def parse_oei_report(text):
                     })
             except: continue
 
-    # 4. 주관식 (강점/보완점)
+    # 5. 주관식 (강점/보완점)
     q_strength = "강점은 무엇입니까"
     q_weakness = "보완해야 할 점은 무엇입니까"
     
@@ -337,7 +341,6 @@ else:
             st.markdown("##### 조직 효과성 흐름 (I-P-O)")
             df_o = pd.DataFrame(data['oei']['stages'])
             if not df_o.empty:
-                # 순서 보장
                 order_map = {'Input': 0, 'Process': 1, 'Output': 2}
                 df_o['order'] = df_o['stage'].map(order_map)
                 df_o = df_o.sort_values('order')
