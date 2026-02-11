@@ -203,8 +203,9 @@ if df is not None and selected_leader_name:
         m1, m2, m3 = st.columns(3)
         
         m1.metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta_total:+.2f} ({prev_year} 대비)")
-        m2.metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}" if top_comp != "-" else "-")
-        m3.metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}" if bot_comp != "-" else "-", delta_color="inverse")
+        # delta_color="off"를 추가하여 화살표 제거 (값만 표시)
+        m2.metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}" if top_comp != "-" else "-", delta_color="off")
+        m3.metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}" if bot_comp != "-" else "-", delta_color="off")
         
         st.divider()
         
