@@ -170,6 +170,26 @@ if df is not None and selected_leader_name:
         
         grouped_scores[year] = year_group_data
 
+    # Common calculations for Tabs
+    avg_scores = {}
+    for y in sorted_years:
+        vals = [v for v in detailed_scores[y].values() if v > 0]
+        avg_scores[y] = sum(vals) / len(vals) if vals else 0
+
+    curr_score = avg_scores[latest_year]
+    prev_year = sorted_years[-2] if len(sorted_years) > 1 else None
+    
+    delta_total = (curr_score - avg_scores[prev_year]) if prev_year else 0
+    
+    latest_series = pd.Series(detailed_scores[latest_year])
+    latest_series = latest_series[latest_series > 0] # 0점 제외
+    
+    if not latest_series.empty:
+        top_comp = latest_series.idxmax()
+        bot_comp = latest_series.idxmin()
+    else:
+        top_comp, bot_comp = "-", "-"
+
     # --- UI 탭 구성 ---
     st.title(f"📊 {selected_leader_name} 님 리더십 진단 분석 (3개년)")
     
@@ -179,28 +199,6 @@ if df is not None and selected_leader_name:
     with tab1:
         st.subheader("Overview (구성원 응답 기준)")
         
-        # 1-1. 상단 지표 계산
-        # 연도별 평균 점수 (0점 제외하고 계산)
-        avg_scores = {}
-        for y in sorted_years:
-            vals = [v for v in detailed_scores[y].values() if v > 0]
-            avg_scores[y] = sum(vals) / len(vals) if vals else 0
-
-        curr_score = avg_scores[latest_year]
-        prev_year = sorted_years[-2] if len(sorted_years) > 1 else None
-        
-        delta_total = (curr_score - avg_scores[prev_year]) if prev_year else 0
-        
-        # 강점/약점 (최신)
-        latest_series = pd.Series(detailed_scores[latest_year])
-        latest_series = latest_series[latest_series > 0] # 0점 제외
-        
-        if not latest_series.empty:
-            top_comp = latest_series.idxmax()
-            bot_comp = latest_series.idxmin()
-        else:
-            top_comp, bot_comp = "-", "-"
-
         # 지표 출력 (3 Columns: 종합 / 최고 강점 / 보완 필요)
         m1, m2, m3 = st.columns(3)
         
@@ -305,8 +303,10 @@ if df is not None and selected_leader_name:
             st.session_state.messages = []
             welcome = f"{selected_leader_name} 임원님, 반갑습니다.\n\n"
             welcome += f"최근({latest_year}) 구성원 평가 기준 종합 점수는 **{curr_score:.2f}점**입니다. "
-            if delta > 0: welcome += "전년 대비 상승했습니다. 📈"
-            elif delta < 0: welcome += "전년 대비 다소 하락했습니다. 📉"
+            
+            # 여기서 delta_total을 사용하면 됨 (이미 계산됨)
+            if delta_total > 0: welcome += "전년 대비 상승했습니다. 📈"
+            elif delta_total < 0: welcome += "전년 대비 다소 하락했습니다. 📉"
             
             st.session_state.messages.append({"role": "assistant", "content": welcome})
             
