@@ -45,12 +45,17 @@ def parse_leadership_report(text):
     # 1. 텍스트 전처리 (모든 공백 제거 -> 검색 정확도 향상)
     clean_text = re.sub(r'\s+', '', text)
     
-    # 2. 검색 범위 한정 ('문항별 점수' 섹션 ~ '주관식' 전까지)
-    # 12~13페이지 영역을 타겟팅
+    # 2. 검색 범위 설정 (핵심 수정 사항)
+    # 문항별 점수 섹션 전체(12~13페이지)를 확보하기 위해 split 로직 변경
+    # '문항별점수' 키워드가 여러 번 나올 수 있으므로, 첫 번째 등장 이후의 모든 텍스트를 가져옴
     if "문항별점수" in clean_text:
-        target_section = clean_text.split("문항별점수")[-1]
-        if "주관식응답결과" in target_section:
-            target_section = target_section.split("주관식응답결과")[0]
+        # 첫 번째 '문항별점수' 이후의 모든 내용을 합침
+        parts = clean_text.split("문항별점수")
+        target_section = "".join(parts[1:]) 
+        
+        # '주관식' 섹션 전까지만 자름
+        if "주관식" in target_section:
+            target_section = target_section.split("주관식")[0]
     else:
         target_section = clean_text
 
@@ -74,11 +79,9 @@ def parse_leadership_report(text):
     scores = []
     
     for pdf_key, label in items_map.items():
-        # 패턴: 항목명 + (중간 텍스트: 상세내용) + 본인점수(x.x) + (중간) + 그룹점수(x.x)
-        # 예: 도전적목표설정 ... 4.8 ... 4.4
-        # 주의: 점수는 0.0 ~ 5.0 사이의 숫자
+        # 패턴: 항목명 + (중간 텍스트) + 본인점수(x.x) + (중간) + 그룹점수(x.x)
+        # 예: SKMS에대한확신 ... 4.5 ... 4.3
         try:
-            # re.escape로 괄호 등 특수문자 처리
             pattern = re.compile(rf"{re.escape(pdf_key)}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
             match = pattern.search(target_section)
             
@@ -99,19 +102,16 @@ def parse_leadership_report(text):
     if scores:
         data["summary"] = round(sum(scores) / len(scores), 1)
     
-    # 4. 주관식 코멘트 추출 (원본 텍스트 사용)
-    # 상사 응답
+    # 4. 주관식 코멘트 추출
     if "상사 응답" in text:
         try:
             start = text.find("상사 응답")
             end = text.find("구성원 응답")
             block = text[start:end]
-            # '·' 또는 '-'로 시작하는 줄 추출
             lines = re.findall(r"[·-]\s*(.*)", block)
             data["comments"]["boss"] = [l.strip() for l in lines if len(l.strip()) > 5]
         except: pass
 
-    # 구성원 응답
     if "구성원 응답" in text:
         try:
             start = text.find("구성원 응답")
@@ -121,11 +121,8 @@ def parse_leadership_report(text):
             clean_lines = []
             for l in lines:
                 l = l.strip()
-                # 페이지 번호, 회사명 등 노이즈 제거
                 if len(l) > 2 and "SK" not in l and not l.endswith("?"):
                     clean_lines.append(l)
-            
-            # 상사 응답과 중복 제거
             boss_set = set(data["comments"]["boss"])
             data["comments"]["members"] = [c for c in clean_lines if c not in boss_set]
         except: pass
@@ -143,16 +140,19 @@ def parse_oei_report(text):
     
     clean_text = re.sub(r'\s+', '', text)
     
-    # 1. 종합 점수 추출
-    # 7페이지 상단: 【조직 효과성 점수 4.6점】
+    # 1. 종합 점수 추출 (리포트 상단 타이틀 부분)
+    # 패턴: 【조직 효과성 점수 4.6점】
     match_total = re.search(r"조직효과성점수([0-5]\.\d)", clean_text)
     if match_total:
         data["summary"] = float(match_total.group(1))
     
     # 2. I-P-O 단계별 점수 추출 (Snapshot 섹션)
-    # "Snapshot" 이후 "Input", "Process", "Output" 점수 찾기
+    # Snapshot 섹션을 우선적으로 확보
     if "Snapshot" in clean_text:
-        snapshot_area = clean_text.split("Snapshot")[-1].split("문항별점수")[0]
+        # Snapshot 부터 문항별점수 전까지
+        snapshot_area = clean_text.split("Snapshot")[-1]
+        if "문항별점수" in snapshot_area:
+            snapshot_area = snapshot_area.split("문항별점수")[0]
         
         # Input (보통 제일 먼저 나오는 큰 숫자)
         m_input = re.search(r"Input.*?([0-5]\.\d)", snapshot_area)
@@ -169,7 +169,7 @@ def parse_oei_report(text):
         if m_output:
             data["stages"].append({"stage": "Output", "score": float(m_output.group(1))})
 
-    # 만약 위에서 못 찾으면 Fallback (전체 텍스트에서 검색)
+    # Fallback (못 찾았을 경우 전체에서 검색)
     if not data["stages"]:
         for stage in ["Input", "Process", "Output"]:
             match = re.search(rf"{stage}.*?([0-5]\.\d)", clean_text)
@@ -177,7 +177,6 @@ def parse_oei_report(text):
                 data["stages"].append({"stage": stage, "score": float(match.group(1))})
 
     # 3. Gap 분석 (항목별 점수)
-    # OEI 상세 항목들 (공백 제거된 키워드)
     oei_items = [
         "명확한목표와업무방향", "목표달성을위한우선순위설정", "변화공감/지지",
         "자율적업무환경조성", "업무장애요인개선", "일하는방식의원칙", "일과삶의균형",
@@ -191,7 +190,6 @@ def parse_oei_report(text):
     ]
     
     for item in oei_items:
-        # 패턴: 항목명 ... 본인(x.x) ... 팀(x.x)
         pattern = re.compile(rf"{re.escape(item)}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
         match = pattern.search(clean_text)
         
