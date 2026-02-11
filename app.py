@@ -46,14 +46,15 @@ def parse_leadership_report(text):
     clean_text = re.sub(r'\s+', '', text)
     
     # 1. 항목별 점수 추출 ('문항별 점수' 섹션 타겟팅)
-    # 문항별 점수 섹션은 보통 12~13페이지에 위치함.
-    # 전체 텍스트에서 '문항별점수' 이후의 내용을 대상으로 검색
-    target_section = clean_text
+    # 문항별 점수 섹션은 보통 12~13페이지에 걸쳐 있음.
+    # [수정] '문항별점수' 키워드 이후의 *모든* 텍스트를 합쳐서 검색 대상(target_section)으로 설정
+    # 기존에는 [-1]로 마지막 부분만 가져와서 앞 페이지 데이터가 누락됨
     if "문항별점수" in clean_text:
-        target_section = clean_text.split("문항별점수")[-1] # 마지막 섹션 사용 (앞부분 목차 제외)
+        target_section = "".join(clean_text.split("문항별점수")[1:])
+    else:
+        target_section = clean_text
 
     # 항목 매핑 (Regex 패턴 : 표시 이름)
-    # SKMS 확신 등 특수문자나 띄어쓰기가 가변적인 항목 대응
     items_map = {
         r"SKMS.*?확신": "SKMS 확신",
         r"패기.*?솔선수범": "패기/솔선수범",
@@ -73,8 +74,6 @@ def parse_leadership_report(text):
     
     for pattern_str, label in items_map.items():
         # 패턴: 항목명 ... 본인점수(x.x) ... 그룹점수(x.x)
-        # 문항별 점수 페이지에서는 본인 점수와 그룹 점수가 나란히 나옴
-        # 예: SKMS에대한확신 ... 4.8 ... 4.3
         regex = re.compile(rf"{pattern_str}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
         match = regex.search(target_section)
         
@@ -97,7 +96,6 @@ def parse_leadership_report(text):
         data["summary"] = round(sum(scores) / len(scores), 1)
     
     # 2. 주관식 코멘트 추출
-    # 원본 텍스트(text) 사용
     if "상사 응답" in text:
         try:
             start = text.find("상사 응답")
@@ -110,17 +108,14 @@ def parse_leadership_report(text):
     if "구성원 응답" in text:
         try:
             start = text.find("구성원 응답")
-            # 주관식 끝부분 찾기 (Review Questions 등)
             end = text.find("Review Questions") if "Review Questions" in text else len(text)
             block = text[start:end]
             lines = re.findall(r"[·]\s*(.*)", block)
-            # 불필요한 텍스트 필터링
             clean_lines = []
             for l in lines:
                 l = l.strip()
                 if len(l) > 2 and "SK" not in l and not l.endswith("?"):
                     clean_lines.append(l)
-            # 상사 응답과 중복 제거
             boss_comments = set(data["comments"]["boss"])
             data["comments"]["members"] = [c for c in clean_lines if c not in boss_comments]
         except: pass
@@ -140,36 +135,34 @@ def parse_oei_report(text):
     
     # 1. 종합 점수 추출 (Output 점수가 아님)
     # 리포트 7페이지 상단: 【조직 효과성 점수 4.6점】
-    match_total = re.search(r"조직효과성점수([0-5]\.\d)", clean_text)
+    # [수정] 정규표현식 유연하게 변경 (중간 문자 허용)
+    match_total = re.search(r"조직효과성점수.*?([0-5]\.\d)", clean_text)
     if match_total:
         data["summary"] = float(match_total.group(1))
     
     # 2. I-P-O 단계별 점수 추출
-    # 리포트 7페이지 Snapshot 섹션 타겟팅
-    # 패턴: Input ... 점수 ... Process ... 점수 ... Output ... 점수
-    # 주의: 순서대로 추출해야 함
-    
-    # Snapshot 섹션 근처 텍스트 추출 (진단결과요약 이후)
-    if "진단결과요약" in clean_text:
-        snapshot_section = clean_text.split("진단결과요약")[-1]
+    # [수정] Snapshot 섹션을 우선적으로 찾아서 그 안의 Input/Process/Output 점수를 추출
+    # 이렇게 해야 뒤에 나오는 표 안의 'Input' 텍스트와 혼동하지 않음
+    target_section = clean_text
+    if "Snapshot" in clean_text:
+        target_section = clean_text.split("Snapshot")[-1]
+    elif "진단결과요약" in clean_text:
+        target_section = clean_text.split("진단결과요약")[-1]
         
-        # Input 점수
-        # "Input" 뒤에 나오는 숫자 (보통 가장 먼저 나오는 큰 숫자)
-        m_input = re.search(r"Input.*?([0-5]\.\d)", snapshot_section)
-        if m_input:
-            data["stages"].append({"stage": "Input", "score": float(m_input.group(1))})
-            
-        # Process 점수
-        m_process = re.search(r"Process.*?([0-5]\.\d)", snapshot_section)
-        if m_process:
-            data["stages"].append({"stage": "Process", "score": float(m_process.group(1))})
-            
-        # Output 점수
-        # Output 뒤에 점수가 바로 안나오고 Percentile이 나올 수 있으므로 주의
-        # 보통 "Output" 글자 뒤에 숫자가 나옴
-        m_output = re.search(r"Output.*?([0-5]\.\d)", snapshot_section)
-        if m_output:
-            data["stages"].append({"stage": "Output", "score": float(m_output.group(1))})
+    # Input 점수
+    m_input = re.search(r"Input.*?([0-5]\.\d)", target_section)
+    if m_input:
+        data["stages"].append({"stage": "Input", "score": float(m_input.group(1))})
+        
+    # Process 점수
+    m_process = re.search(r"Process.*?([0-5]\.\d)", target_section)
+    if m_process:
+        data["stages"].append({"stage": "Process", "score": float(m_process.group(1))})
+        
+    # Output 점수
+    m_output = re.search(r"Output.*?([0-5]\.\d)", target_section)
+    if m_output:
+        data["stages"].append({"stage": "Output", "score": float(m_output.group(1))})
 
     # 만약 위에서 못 찾았다면 전체 텍스트에서 시도 (Fallback)
     if not data["stages"]:
@@ -178,7 +171,7 @@ def parse_oei_report(text):
             if match:
                 data["stages"].append({"stage": stage, "score": float(match.group(1))})
 
-    # 3. Gap 분석 (기존 로직 유지하되 항목명 매칭 보완)
+    # 3. Gap 분석 (기존 로직 유지)
     oei_items = [
         "명확한목표와업무방향", "목표달성을위한우선순위설정", "변화공감/지지",
         "자율적업무환경조성", "업무장애요인개선", "일하는방식의원칙", "일과삶의균형",
@@ -192,7 +185,6 @@ def parse_oei_report(text):
     ]
     
     for item in oei_items:
-        # 항목명 ... 본인(x.x) ... 팀(x.x)
         pattern = re.compile(rf"{re.escape(item)}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
         match = pattern.search(clean_text)
         
@@ -200,10 +192,6 @@ def parse_oei_report(text):
             try:
                 self_val = float(match.group(1))
                 team_val = float(match.group(2))
-                
-                # Gap 계산 (팀 - 본인)
-                # 리더가 낮게(3.0), 팀이 높게(4.5) -> 과소평가(겸손/숨겨진강점) -> Underestimation
-                # 리더가 높게(5.0), 팀이 낮게(3.0) -> 과대평가(맹점) -> Overestimation
                 gap = team_val - self_val
                 
                 gap_type = "Alignment"
@@ -211,7 +199,6 @@ def parse_oei_report(text):
                 if gap <= -0.5: gap_type = "Overestimation"
                 
                 if gap_type != "Alignment":
-                    # 이름 가독성 복원
                     disp = item.replace("R&C", "R&C ").replace("목표", " 목표")
                     data["gaps"].append({
                         "category": disp,
