@@ -201,38 +201,12 @@ if df is not None and selected_leader_name:
         else:
             top_comp, bot_comp = "-", "-"
 
-        # 급상승/급하락 계산
-        max_inc_comp, max_inc_val = "-", 0
-        max_dec_comp, max_dec_val = "-", 0
-        
-        if prev_year:
-            curr_s = pd.Series(detailed_scores[latest_year])
-            prev_s = pd.Series(detailed_scores[prev_year])
-            
-            # 두 연도 모두 0보다 큰 데이터만 비교
-            valid_idx = curr_s[(curr_s > 0) & (prev_s > 0)].index
-            if not valid_idx.empty:
-                diff_series = curr_s[valid_idx] - prev_s[valid_idx]
-                
-                # 가장 큰 상승 (양수 최대값)
-                if diff_series.max() > 0:
-                    max_inc_comp = diff_series.idxmax()
-                    max_inc_val = diff_series.max()
-                
-                # 가장 큰 하락 (음수 최소값)
-                if diff_series.min() < 0:
-                    max_dec_comp = diff_series.idxmin()
-                    max_dec_val = diff_series.min()
-
-        # 지표 출력
-        m1, m2, m3, m4, m5 = st.columns(5)
+        # 지표 출력 (3 Columns: 종합 / 최고 강점 / 보완 필요)
+        m1, m2, m3 = st.columns(3)
         
         m1.metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta_total:+.2f} ({prev_year} 대비)")
         m2.metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}" if top_comp != "-" else "-")
         m3.metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}" if bot_comp != "-" else "-", delta_color="inverse")
-        
-        m4.metric(f"📈 급상승 ({prev_year} 대비)", max_inc_comp, f"{max_inc_val:+.1f}" if max_inc_comp != "-" else "-")
-        m5.metric(f"📉 급하락 ({prev_year} 대비)", max_dec_comp, f"{max_dec_val:+.1f}" if max_dec_comp != "-" else "-", delta_color="inverse")
         
         st.divider()
         
@@ -245,6 +219,7 @@ if df is not None and selected_leader_name:
                 "Year": sorted_years,
                 "Score": [avg_scores[y] for y in sorted_years]
             })
+            # text="Score" 추가: 점수 레이블 표시
             fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5], text="Score")
             fig_line.update_traces(line_color='#2563eb', line_width=3, textposition="top center", texttemplate='%{text:.2f}')
             st.plotly_chart(fig_line, use_container_width=True)
@@ -340,7 +315,6 @@ if df is not None and selected_leader_name:
                 with st.chat_message(msg["role"]):
                     st.write(msg["content"])
         
-        # 입력창 (항상 하단에 위치)
         if prompt := st.chat_input("질문 입력..."):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with chat_container:
