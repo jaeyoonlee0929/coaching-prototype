@@ -96,47 +96,6 @@ def parse_columns(df):
             
     return meta_cols, member_scores, peer_scores, text_cols
 
-# --- 커스텀 Metric 함수 (색상 유지, 화살표 제거) ---
-def custom_metric(label, value, delta=None, delta_color="normal"):
-    """
-    HTML/CSS를 사용하여 화살표 없이 색상만 적용된 Metric을 표시합니다.
-    delta_color: "normal" (양수 초록, 음수 빨강), "inverse" (양수 빨강, 음수 초록), "off" (색상 없음)
-    """
-    delta_html = ""
-    if delta is not None and delta_color != "off":
-        try:
-            delta_val = float(str(delta).split()[0]) # 숫자만 추출
-            if delta_val > 0:
-                color = "green" if delta_color == "normal" else "red"
-                sign = "+"
-            elif delta_val < 0:
-                color = "red" if delta_color == "normal" else "green"
-                sign = ""
-            else:
-                color = "gray"
-                sign = ""
-            
-            if delta_val != 0:
-                # 괄호 안의 텍스트가 있다면 포함
-                extra_text = ""
-                if "(" in str(delta):
-                    extra_text = f" ({str(delta).split('(')[1]}"
-                
-                delta_str = f"{sign}{delta_val:.2f}{extra_text}"
-                delta_html = f'<span style="color: {color}; font-size: 0.9em; font-weight: bold;">{delta_str}</span>'
-        except:
-            pass # 파싱 실패 시 델타 표시 안 함
-
-    st.markdown(f"""
-    <div style="margin-bottom: 10px;">
-        <p style="font-size: 0.9rem; margin-bottom: 0px; color: #666;">{label}</p>
-        <div style="display: flex; align-items: baseline; gap: 8px;">
-            <span style="font-size: 1.8rem; font-weight: 600; color: #333;">{value}</span>
-            {delta_html}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
 # --- 사이드바: 업로드 및 대상자 선택 ---
 with st.sidebar:
     st.title("👑 임원 리더십 코칭")
@@ -176,16 +135,15 @@ if df is not None and selected_leader_name:
         year_group_data = {}
         year_detail_data = {}
         
-        # 상세 점수 추출 (0점 제외 로직 추가 가능)
+        # 상세 점수 추출
         for col in member_map[year]:
             if "_동료_" in col: continue
             comp_name = col.replace(f"_{year}", "")
             val = leader_data[col]
-            # 유효한 점수만 저장 (NaN이나 0 제외)
             if pd.notna(val) and val > 0:
                 year_detail_data[comp_name] = val
             else:
-                year_detail_data[comp_name] = 0 # 계산을 위해 0으로 둠
+                year_detail_data[comp_name] = 0
         detailed_scores[year] = year_detail_data
         
         # 그룹별 평균 계산
@@ -201,7 +159,7 @@ if df is not None and selected_leader_name:
                 
                 if target_col:
                     val = year_detail_data[target_col]
-                    if val > 0: # 0점은 평균 계산에서 제외
+                    if val > 0:
                         scores.append(val)
             
             if scores:
@@ -211,7 +169,7 @@ if df is not None and selected_leader_name:
         
         grouped_scores[year] = year_group_data
 
-    # Common calculations for Tabs
+    # Common calculations
     avg_scores = {}
     for y in sorted_years:
         vals = [v for v in detailed_scores[y].values() if v > 0]
@@ -223,13 +181,22 @@ if df is not None and selected_leader_name:
     delta_total = (curr_score - avg_scores[prev_year]) if prev_year else 0
     
     latest_series = pd.Series(detailed_scores[latest_year])
-    latest_series = latest_series[latest_series > 0] # 0점 제외
+    latest_series = latest_series[latest_series > 0]
     
     if not latest_series.empty:
         top_comp = latest_series.idxmax()
         bot_comp = latest_series.idxmin()
     else:
         top_comp, bot_comp = "-", "-"
+
+    # 개별 역량 Delta 계산을 위한 준비
+    def get_comp_delta(comp_name):
+        if not prev_year: return None
+        prev_val = detailed_scores[prev_year].get(comp_name, 0)
+        curr_val = detailed_scores[latest_year].get(comp_name, 0)
+        if prev_val > 0 and curr_val > 0:
+            return curr_val - prev_val
+        return None
 
     # --- UI 탭 구성 ---
     st.title(f"📊 {selected_leader_name} 님 리더십 진단 분석 (3개년)")
@@ -240,25 +207,25 @@ if df is not None and selected_leader_name:
     with tab1:
         st.subheader("Overview (구성원 응답 기준)")
         
-        # 지표 출력 (3 Columns: 종합 / 최고 강점 / 보완 필요)
         m1, m2, m3 = st.columns(3)
         
-        with m1:
-            custom_metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta_total} ({prev_year} 대비)")
-        with m2:
-            # 강점은 높을수록 좋으므로 normal (초록색 유지) 혹은 색상 없음
-            # 여기선 값만 표시하고 delta는 표시하지 않거나, 전년 대비 증감을 보여줄 수 있음. 
-            # 일단 값만 표시
-            custom_metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}", delta_color="off")
-        with m3:
-            # 보완 필요는 낮을수록 나쁨 -> 색상 강조 (빨강)
-            # 여기서는 점수 자체를 붉게 하기보다 delta_color="inverse" 개념을 적용할 delta가 없으므로
-            # 그냥 텍스트로 표시
-            custom_metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}", delta_color="off")
+        m1.metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta_total:+.2f} ({prev_year} 대비)")
+        
+        # 강점 Metric
+        delta_top = get_comp_delta(top_comp)
+        delta_top_str = f"{delta_top:+.1f}" if delta_top is not None else None
+        m2.metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}", delta=delta_top_str)
+        
+        # 약점 Metric (Delta 색상을 inverse로 하여 하락 시 빨강, 상승 시 초록...이 아니라 약점은 점수가 낮은 것이니)
+        # 보통 점수는 오르면 좋음(Green). 약점이라도 점수가 올랐으면 Green이 맞음.
+        # 따라서 delta_color="normal" (기본값) 사용
+        delta_bot = get_comp_delta(bot_comp)
+        delta_bot_str = f"{delta_bot:+.1f}" if delta_bot is not None else None
+        m3.metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}", delta=delta_bot_str)
         
         st.divider()
         
-        # 1-2. 차트 영역
+        # 차트 영역
         c1, c2 = st.columns([1, 1])
         
         with c1:
@@ -267,7 +234,6 @@ if df is not None and selected_leader_name:
                 "Year": sorted_years,
                 "Score": [avg_scores[y] for y in sorted_years]
             })
-            # text="Score" 추가: 점수 레이블 표시
             fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5], text="Score")
             fig_line.update_traces(line_color='#2563eb', line_width=3, textposition="top center", texttemplate='%{text:.2f}')
             st.plotly_chart(fig_line, use_container_width=True)
@@ -281,7 +247,7 @@ if df is not None and selected_leader_name:
             
             for i, year in enumerate(sorted_years):
                 vals = [grouped_scores[year].get(cat, 0) for cat in categories]
-                vals += [vals[0]] # Close loop
+                vals += [vals[0]]
                 cats_closed = categories + [categories[0]]
                 
                 fig_radar.add_trace(go.Scatterpolar(
@@ -352,7 +318,6 @@ if df is not None and selected_leader_name:
         if "messages" not in st.session_state:
             st.session_state.messages = []
             
-            # 초기 환영 메시지 및 제안
             welcome = f"{selected_leader_name} 임원님, 반갑습니다. 3년치 리더십 데이터 분석을 완료했습니다.\n\n"
             welcome += f"최근({latest_year}) 구성원 평가 기준 종합 점수는 **{curr_score:.2f}점**입니다. "
             if delta_total > 0: welcome += "전년 대비 상승했습니다. 📈\n\n"
@@ -360,7 +325,6 @@ if df is not None and selected_leader_name:
             
             welcome += "현재 가장 고민되시는 리더십 이슈는 무엇인가요? 편하게 말씀해 주시면 대화를 시작하겠습니다.\n\n"
             
-            # 선택 가능한 프롬프트 제안 (최초 1회)
             welcome += """---
             💡 **추가로 논의할 수 있는 주제들** (아래 내용을 복사해서 질문하시면 심도 있게 다뤄드립니다)
             * 📚 **이론 학습:** 현재 나의 약점과 관련된 최신 리더십 이론이나 아티클을 추천해 주세요.
