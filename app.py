@@ -366,4 +366,5 @@ if df is not None and selected_leader_name:
                 except Exception as e:
                     st.error(f"오류: {e}")
             else:
-                st.warning("API Key 미설정")import streamlit as st
+                st.warning("API Key 미설정")
+
