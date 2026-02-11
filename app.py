@@ -21,71 +21,38 @@ try:
 except FileNotFoundError:
     OPENAI_API_KEY = None
 except KeyError:
-    st.error("Secrets에 'JYL' 키가 설정되지 않았습니다.")
-    st.stop()
+    # 로컬 테스트 등을 위해 에러가 아닌 경고로 처리 (키가 없으면 코칭만 안됨)
+    OPENAI_API_KEY = None
+    st.warning("Secrets에 'JYL' 키가 설정되지 않았습니다. AI 코칭 기능이 제한됩니다.")
 
-# --- 기본 데모 데이터 (파싱 실패 시 Fallback) ---
-DEMO_DATA = {
-    "leadership": {
-        "summary": 4.8,
-        "details": [
-            {"category": "SKMS 확신", "self": 4.8, "group": 4.3},
-            {"category": "패기/솔선수범", "self": 4.8, "group": 4.4},
-            {"category": "Integrity", "self": 4.8, "group": 4.5},
-            {"category": "경영환경 이해", "self": 4.8, "group": 4.5},
-            {"category": "팀 목표 수립", "self": 4.8, "group": 4.5},
-            {"category": "변화 주도", "self": 4.8, "group": 4.4},
-            {"category": "도전적 목표", "self": 4.8, "group": 4.4},
-            {"category": "팀워크 발휘", "self": 4.8, "group": 4.3},
-            {"category": "과감한 실행", "self": 4.8, "group": 4.4},
-            {"category": "자율환경 조성", "self": 5.0, "group": 4.4},
-            {"category": "소통", "self": 4.8, "group": 4.4},
-            {"category": "구성원 육성", "self": 4.8, "group": 4.3},
-        ],
-        "comments": {
-            "boss": ["(데이터 추출 실패) - 데모 데이터입니다."],
-            "members": ["(데이터 추출 실패) - 데모 데이터입니다."]
-        }
-    },
-    "oei": {
-        "summary": 4.6,
-        "stages": [
-            {"stage": "Input", "score": 4.6},
-            {"stage": "Process", "score": 4.5},
-            {"stage": "Output", "score": 4.7},
-        ],
-        "gaps": [],
-        "comments": {
-            "strength": ["(데이터 추출 실패)"],
-            "weakness": ["(데이터 추출 실패)"]
-        }
-    }
-}
-
-# --- 1. PDF 텍스트 추출 ---
+# --- 1. PDF 텍스트 추출 및 전처리 ---
 def extract_text_from_pdf(file):
-    text = ""
+    full_text = ""
     try:
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    text += extracted + "\n"
-        return text
+                text = page.extract_text()
+                if text:
+                    full_text += text + "\n"
+        return full_text
     except Exception as e:
         st.error(f"PDF 읽기 오류: {e}")
         return ""
 
-# --- 2. 리더십 진단 파싱 로직 ---
-def parse_leadership_text(text):
-    data = {"summary": 0.0, "details": [], "comments": {"boss": [], "members": []}}
+# --- 2. 리더십 진단 파싱 로직 (개선됨) ---
+def parse_leadership_report(text):
+    data = {
+        "summary": 0.0,
+        "details": [],
+        "comments": {"boss": [], "members": []}
+    }
     
-    # 텍스트 정규화 (공백 제거 등으로 매칭 확률 높임)
-    clean_text = text.replace(" ", "")
+    # 파싱 정확도를 위해 공백 제거한 텍스트 생성
+    clean_text = re.sub(r'\s+', '', text)
     
-    # 카테고리 매핑 (PDF 내 실제 텍스트 -> 표시할 이름)
-    # 정규표현식으로 찾기 위해 공백을 제거한 키워드를 사용
-    categories = {
+    # [매핑] 보고서 항목명 -> 표시할 이름
+    # 주의: PDF상의 텍스트(공백제거)와 정확히 일치해야 함
+    items_map = {
         "SKMS에대한확신": "SKMS 확신",
         "패기/솔선수범": "패기/솔선수범",
         "Integrity": "Integrity",
@@ -99,211 +66,216 @@ def parse_leadership_text(text):
         "소통": "소통",
         "구성원육성": "구성원 육성"
     }
-    
+
     scores = []
-    # 점수 추출 (패턴: 카테고리...숫자.숫자...숫자.숫자)
-    # 예: SKMS에대한확신 ... 4.8 ... 4.3
-    for key, label in categories.items():
-        # 카테고리 뒤에 나오는 x.x 형태의 숫자 2개를 찾음 (본인, 그룹)
-        # PDF 순서상 본인이 먼저 나오고 그룹이 나중에 나온다고 가정
-        pattern = re.compile(rf"{re.escape(key)}.*?(\d\.\d).*?(\d\.\d)", re.DOTALL)
+    
+    # 점수 추출 로직: 항목명 뒤에 나오는 숫자 패턴 (x.x ... x.x) 찾기
+    for pdf_key, label in items_map.items():
+        # 패턴: 항목명 + 중간문자들 + 숫자(본인) + 중간문자들 + 숫자(그룹)
+        # 예: SKMS에대한확신...4.8...4.3
+        pattern = re.compile(rf"{re.escape(pdf_key)}.*?(\d\.\d).*?(\d\.\d)", re.DOTALL)
         match = pattern.search(clean_text)
         
         if match:
-            self_score = float(match.group(1))
-            group_score = float(match.group(2))
-            data["details"].append({"category": label, "self": self_score, "group": group_score})
-            scores.append(self_score)
+            self_val = float(match.group(1))
+            group_val = float(match.group(2))
+            data["details"].append({
+                "category": label,
+                "self": self_val,
+                "group": group_val
+            })
+            scores.append(self_val)
     
-    # 데이터가 없으면 None 반환 (데모 데이터 사용 유도)
-    if not data["details"]:
-        return None
-        
-    data["summary"] = round(sum(scores) / len(scores), 1)
+    if scores:
+        data["summary"] = round(sum(scores) / len(scores), 1)
+    
+    # 주관식 코멘트 추출 (원본 텍스트 사용)
+    # 질문 키워드를 기준으로 텍스트 블록을 나눔
+    
+    # 상사 응답
+    if "상사 응답" in text:
+        # 상사 응답 섹션 추출
+        section_match = re.search(r"상사 응답(.*?)(구성원 응답|$)", text, re.DOTALL)
+        if section_match:
+            section_text = section_match.group(1)
+            # '·' 또는 '-'로 시작하는 줄 추출
+            comments = re.findall(r"[·-]\s*(.*)", section_text)
+            # 너무 짧거나 의미 없는 문장 제외
+            data["comments"]["boss"] = [c.strip() for c in comments if len(c.strip()) > 3]
 
-    # 주관식 코멘트 추출 (섹션 헤더 기준 분리)
-    # 원본 텍스트 사용 (공백 유지)
-    if "상사 응답" in text and "구성원 응답" in text:
-        try:
-            boss_part = text.split("상사 응답")[1].split("구성원 응답")[0]
-            # 점(·)으로 시작하는 문장 추출
-            boss_comments = [line.strip() for line in boss_part.split('\n') if "·" in line or len(line.strip()) > 10]
-            data["comments"]["boss"] = boss_comments[:3]
-        except: pass
-        
+    # 구성원 응답
     if "구성원 응답" in text:
-        try:
-            # 뒷부분 전체 혹은 다음 섹션 전까지
-            member_part = text.split("구성원 응답")[1]
-            if "Review Questions" in member_part:
-                member_part = member_part.split("Review Questions")[0]
-            
-            member_comments = [line.strip() for line in member_part.split('\n') if "·" in line or len(line.strip()) > 10]
-            data["comments"]["members"] = member_comments[:4]
-        except: pass
+        # 구성원 응답 섹션들 (여러 페이지에 걸쳐 있을 수 있음)
+        # "구성원 응답" 키워드 이후의 모든 텍스트에서 추출
+        member_section_start = text.find("구성원 응답")
+        member_text = text[member_section_start:]
+        
+        # 주관식 답변 추출 (· 로 시작하는 문장)
+        comments = re.findall(r"[·-]\s*(.*)", member_text)
+        
+        # 상사 응답과 중복 제거 및 필터링
+        filtered_comments = []
+        for c in comments:
+            c = c.strip()
+            if len(c) > 3 and c not in data["comments"]["boss"] and "SK" not in c and "PAGE" not in c:
+                 filtered_comments.append(c)
+        
+        data["comments"]["members"] = filtered_comments
 
     return data
 
-# --- 3. OEI 진단 파싱 로직 ---
-def parse_oei_text(text):
-    data = {"summary": 0.0, "stages": [], "gaps": [], "comments": {"strength": [], "weakness": []}}
+# --- 3. OEI 진단 파싱 로직 (개선됨) ---
+def parse_oei_report(text):
+    data = {
+        "summary": 0.0,
+        "stages": [],
+        "gaps": [],
+        "comments": {"strength": [], "weakness": []}
+    }
     
-    # Summary Scores (Input, Process, Output)
-    # 보통 Snapshot 페이지에 Input x.x Process x.x Output x.x 형태로 나옴
+    clean_text = re.sub(r'\s+', '', text)
+    
+    # 1. Summary 점수 (Input, Process, Output)
+    # 스냅샷 페이지에서 추출 (Input4.6 ... Process4.5 ... Output4.7)
     stages = ["Input", "Process", "Output"]
-    summary_scores = {}
     
     for stage in stages:
-        # Input ... 4.6 찾기
-        match = re.search(rf"{stage}.*?(\d\.\d)", text)
-        if match:
-            summary_scores[stage] = float(match.group(1))
-        else:
-            summary_scores[stage] = 0.0
-            
-    data["stages"] = [
-        {"stage": "Input", "score": summary_scores.get("Input", 0)},
-        {"stage": "Process", "score": summary_scores.get("Process", 0)},
-        {"stage": "Output", "score": summary_scores.get("Output", 0)}
-    ]
-    data["summary"] = summary_scores.get("Output", 0.0)
+        # "Input" 뒤에 나오는 숫자 찾기
+        match = re.search(rf"{stage}.*?(\d\.\d)", clean_text)
+        score = float(match.group(1)) if match else 0.0
+        data["stages"].append({"stage": stage, "score": score})
+        
+        if stage == "Output":
+            data["summary"] = score
 
-    # Gap Analysis를 위한 세부 항목 파싱
-    # 항목명 ... 본인점수 ... 팀점수
-    # 주요 OEI 항목 리스트 (일부 예시)
+    # 2. Gap 분석을 위한 상세 항목 점수 추출
+    # 항목명 리스트 (PDF 텍스트 기준)
     oei_items = [
-        "명확한 목표와 업무 방향", "목표 달성을 위한 우선순위 설정", "변화 공감/지지",
-        "자율적 업무 환경 조성", "업무 장애요인 개선", "일하는 방식의 원칙", "일과 삶의 균형",
-        "조직 목표 인식", "개인 역할/책임 인식", "상호 존중", "경영층의 관심", "R&C 확보",
-        "SUPEX 지향", "틀을 깨는 시도 추구", "유연한 사고", "적극적 문제 해결", "신속한 상황 인식",
-        "상호 협력", "정보 공유", "다양성/포용성"
+        "명확한목표와업무방향", "목표달성을위한우선순위설정", "변화공감/지지",
+        "자율적업무환경조성", "업무장애요인개선", "일하는방식의원칙·체계", "일과삶의균형",
+        "조직목표인식", "개인역할/책임인식", "역량수준", "역량개발노력", "동기수준", "윤리의식", "상호존중",
+        "경영층의관심", "R&C확보", "공정한평가", "성장기회",
+        "SUPEX지향", "틀을깨는시도추구", "유연한사고", "적극적문제해결", "신속한상황인식",
+        "의사결정참여", "자유로운의견제시", "상호협력", "정보공유", "다양성/포용성",
+        "조직간협업", "협력적네트워크구축",
+        "목표달성", "적시성", "혁신성", "지속가능성",
+        "긍정적정서", "일에대한가치", "성취감", "개인성장", "미래기대"
     ]
-    
-    clean_text = text.replace(" ", "")
     
     for item in oei_items:
-        clean_item = item.replace(" ", "")
-        # 본인점수(x.x) ... 팀점수(x.x)
-        pattern = re.compile(rf"{re.escape(clean_item)}.*?(\d\.\d).*?(\d\.\d)", re.DOTALL)
+        # 패턴: 항목명 ... 본인점수 ... 팀점수
+        # 예: 명확한목표와업무방향 ... 5.0 ... 4.8
+        pattern = re.compile(rf"{re.escape(item)}.*?(\d\.\d).*?(\d\.\d)", re.DOTALL)
         match = pattern.search(clean_text)
         
         if match:
-            self_score = float(match.group(1))
-            team_score = float(match.group(2))
+            self_val = float(match.group(1))
+            team_val = float(match.group(2))
             
-            diff = team_score - self_score
+            # Gap 계산
+            gap = team_val - self_val
             gap_type = "Alignment"
+            if gap >= 0.5: gap_type = "Underestimation" # 나는 낮게, 팀은 높게 (숨겨진 강점)
+            if gap <= -0.5: gap_type = "Overestimation" # 나는 높게, 팀은 낮게 (맹점)
             
-            # 차이가 0.5 이상인 경우만 기록
-            if diff >= 0.5: gap_type = "Underestimation" # 나는 낮게, 팀은 높게 (숨겨진 강점)
-            if diff <= -0.5: gap_type = "Overestimation" # 나는 높게, 팀은 낮게 (맹점)
+            # 원래 이름으로 복원 (공백 추가 등은 생략하고 의미 전달 위주로)
+            display_name = item.replace("R&C", "R&C ").replace("목표", " 목표")
             
             if gap_type != "Alignment":
                 data["gaps"].append({
-                    "category": item,
-                    "self": self_score,
-                    "team": team_score,
+                    "category": display_name,
+                    "self": self_val,
+                    "team": team_val,
                     "type": gap_type
                 })
+
+    # 3. 주관식 (강점/보완점)
+    # 원본 텍스트(text) 사용
     
-    # 주관식 코멘트 (강점, 보완점)
+    # 강점
     if "강점은 무엇입니까" in text:
-        try:
-            part = text.split("강점은 무엇입니까")[1].split("보완해야 할 점")[0]
-            lines = [l.strip() for l in part.split('\n') if len(l.strip()) > 2]
-            data["comments"]["strength"] = lines[:3]
-        except: pass
+        # 해당 질문 뒤부터 다음 질문 전까지
+        # 보통 질문은 '?'로 끝남.
+        start_idx = text.find("강점은 무엇입니까")
+        sub_text = text[start_idx:]
+        # 다음 질문('보완해야 할 점' 등) 찾기
+        next_q_idx = sub_text.find("보완해야 할 점")
+        if next_q_idx == -1: next_q_idx = len(sub_text)
         
+        strength_block = sub_text[:next_q_idx]
+        lines = re.findall(r"[·-]\s*(.*)", strength_block)
+        data["comments"]["strength"] = [l.strip() for l in lines if len(l.strip()) > 2][:5]
+
+    # 보완점
     if "보완해야 할 점은 무엇입니까" in text:
-        try:
-            part = text.split("보완해야 할 점은 무엇입니까")[1]
-            if "장애요인" in part:
-                part = part.split("장애요인")[0]
-            lines = [l.strip() for l in part.split('\n') if len(l.strip()) > 2]
-            data["comments"]["weakness"] = lines[:3]
-        except: pass
+        start_idx = text.find("보완해야 할 점은 무엇입니까")
+        sub_text = text[start_idx:]
+        next_q_idx = sub_text.find("장애요인") # 보통 다음 섹션이 장애요인
+        if next_q_idx == -1: next_q_idx = len(sub_text)
+        
+        weakness_block = sub_text[:next_q_idx]
+        lines = re.findall(r"[·-]\s*(.*)", weakness_block)
+        data["comments"]["weakness"] = [l.strip() for l in lines if len(l.strip()) > 2][:5]
 
     return data
 
-# --- 데이터 통합 분석 함수 ---
-def analyze_report_data(l_text, o_text):
-    progress_text = "PDF 데이터를 정밀 분석 중입니다..."
-    my_bar = st.progress(0, text=progress_text)
-
-    # 1. 리더십 데이터 파싱
-    leadership_data = parse_leadership_text(l_text)
-    my_bar.progress(50, text="리더십 역량 점수 추출 완료")
-    
-    # 2. OEI 데이터 파싱
-    oei_data = parse_oei_text(o_text)
-    my_bar.progress(90, text="조직 효과성 및 Gap 분석 완료")
-    
-    time.sleep(0.5)
-    my_bar.empty()
-    
-    # 파싱 실패 시 데모 데이터 반환
-    if not leadership_data:
-        st.toast("리더십 리포트 파싱 실패. 데모 데이터를 표시합니다.", icon="⚠️")
-        return DEMO_DATA
+# --- 4. 통합 분석 함수 ---
+def analyze_reports(l_file, o_file):
+    with st.spinner('PDF 리포트를 정밀 분석 중입니다...'):
+        l_text = extract_text_from_pdf(l_file)
+        o_text = extract_text_from_pdf(o_file)
         
-    return {
-        "leadership": leadership_data,
-        "oei": oei_data
-    }
+        if not l_text or not o_text:
+            return None
+            
+        l_data = parse_leadership_report(l_text)
+        o_data = parse_oei_report(o_text)
+        
+        return {"leadership": l_data, "oei": o_data}
 
-# --- 사이드바 UI ---
+# --- 사이드바 ---
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/SK_logo.svg/1200px-SK_logo.svg.png", width=60)
     st.title("📂 리포트 업로드")
+    leadership_file = st.file_uploader("1. 리더십 진단 보고서 (PDF)", type="pdf")
+    oei_file = st.file_uploader("2. 조직효과성(OEI) 보고서 (PDF)", type="pdf")
     
-    st.info("본인의 진단 리포트(PDF)를 업로드해주세요.")
-    
-    leadership_file = st.file_uploader("1. 리더십 진단 보고서", type="pdf")
-    oei_file = st.file_uploader("2. 조직효과성(OEI) 보고서", type="pdf")
-    
-    st.markdown("---")
-    if st.button("🔄 분석 결과 초기화"):
+    st.divider()
+    if st.button("🔄 초기화"):
         st.session_state.clear()
         st.rerun()
 
 # --- 메인 로직 ---
 
+# Session State 초기화
 if "analyzed_data" not in st.session_state:
     st.session_state.analyzed_data = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 파일 업로드 시 분석 수행
+# 파일 업로드 시 분석
 if leadership_file and oei_file and st.session_state.analyzed_data is None:
-    l_text = extract_text_from_pdf(leadership_file)
-    o_text = extract_text_from_pdf(oei_file)
-    
-    if l_text and o_text:
-        data = analyze_report_data(l_text, o_text)
-        st.session_state.analyzed_data = data
+    result = analyze_reports(leadership_file, oei_file)
+    if result:
+        st.session_state.analyzed_data = result
         
-        # 코칭 챗봇 초기 메시지
+        # 코칭 메시지 초기화
         if not st.session_state.messages:
-            gaps = data['oei']['gaps']
+            gaps = result['oei']['gaps']
+            welcome_text = "반갑습니다, 팀장님. 리포트 분석이 완료되었습니다."
+            
             if gaps:
                 main_issue = gaps[0]['category']
-                gap_type = "과소평가" if gaps[0]['type'] == 'Underestimation' else "과대평가"
-                welcome_msg = f"""반갑습니다, 팀장님. 리포트 분석이 완료되었습니다.
-                
-분석 결과, **'{main_issue}'** 항목에서 본인과 구성원의 인식 차이({gap_type})가 가장 크게 나타났습니다.
-이 결과에 대해 어떻게 생각하시나요?"""
+                gtype = "과소평가(숨겨진 강점)" if gaps[0]['type'] == 'Underestimation' else "과대평가(맹점)"
+                welcome_text += f"\n\n분석 결과, **'{main_issue}'** 항목에서 본인과 구성원의 인식 차이({gtype})가 발견되었습니다. 이에 대해 어떻게 생각하시나요?"
             else:
-                welcome_msg = "반갑습니다. 분석 결과, 리더님과 구성원의 인식이 전반적으로 잘 일치하고 있습니다. 가장 고민되시는 점은 무엇인가요?"
+                welcome_text += "\n\n리더님과 구성원의 인식이 전반적으로 잘 일치합니다. 현재 가장 고민되는 팀 운영 이슈는 무엇인가요?"
                 
-            st.session_state.messages.append({"role": "assistant", "content": welcome_msg})
+            st.session_state.messages.append({"role": "assistant", "content": welcome_text})
 
 # --- 화면 렌더링 ---
-
 if st.session_state.analyzed_data is None:
     st.title("🏆 AI 리더십 코칭")
-    st.markdown("리포트를 업로드하면 실제 데이터를 분석하여 대시보드를 생성합니다.")
-    st.warning("👈 왼쪽 사이드바에서 파일을 업로드해주세요.")
-
+    st.info("왼쪽 사이드바에서 두 개의 진단 보고서(PDF)를 업로드해주세요.")
 else:
     data = st.session_state.analyzed_data
     
@@ -311,121 +283,149 @@ else:
     
     tabs = st.tabs(["종합 대시보드", "리더십 진단 심층분석", "조직효과성 진단 심층분석", "🤖 AI 코칭"])
     
-    # [TAB 1] 종합 대시보드
+    # [Tab 1] 종합 대시보드
     with tabs[0]:
         st.subheader("Overview")
-        col1, col2 = st.columns(2)
-        col1.metric("리더십 종합 점수 (Self)", f"{data['leadership']['summary']} / 5.0")
-        col2.metric("조직효과성 (Output)", f"{data['oei']['summary']} / 5.0")
-        
         c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("##### 리더십 역량 밸런스")
-            df_radar = pd.DataFrame(data['leadership']['details'])
-            if not df_radar.empty:
+        c1.metric("리더십 종합 점수 (Self)", f"{data['leadership']['summary']} / 5.0")
+        c2.metric("조직효과성 (Output)", f"{data['oei']['summary']} / 5.0")
+        
+        c3, c4 = st.columns(2)
+        with c3:
+            st.markdown("##### 리더십 역량 (Radar)")
+            df_l = pd.DataFrame(data['leadership']['details'])
+            if not df_l.empty:
                 fig = go.Figure()
-                fig.add_trace(go.Scatterpolar(r=df_radar['self'], theta=df_radar['category'], fill='toself', name='본인'))
-                fig.add_trace(go.Scatterpolar(r=df_radar['group'], theta=df_radar['category'], fill='toself', name='그룹평균', opacity=0.5))
-                fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), margin=dict(t=20, b=20), height=350)
+                fig.add_trace(go.Scatterpolar(r=df_l['self'], theta=df_l['category'], fill='toself', name='본인'))
+                fig.add_trace(go.Scatterpolar(r=df_l['group'], theta=df_l['category'], fill='toself', name='구성원'))
+                fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), height=350, margin=dict(t=30, b=30))
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.write("리더십 상세 데이터가 없습니다.")
-            
-        with c2:
-            st.markdown("##### 조직 효과성 흐름 (I-P-O)")
-            df_oei = pd.DataFrame(data['oei']['stages'])
-            fig_bar = go.Figure([go.Bar(x=df_oei['stage'], y=df_oei['score'], marker_color=['#60a5fa', '#3b82f6', '#2563eb'])])
-            fig_bar.update_yaxes(range=[0, 5.5])
-            fig_bar.update_layout(margin=dict(t=20, b=20), height=350)
-            st.plotly_chart(fig_bar, use_container_width=True)
+                st.warning("리더십 상세 데이터를 추출하지 못했습니다.")
+        
+        with c4:
+            st.markdown("##### 조직 효과성 (I-P-O)")
+            df_o = pd.DataFrame(data['oei']['stages'])
+            if not df_o.empty:
+                fig2 = go.Figure([go.Bar(x=df_o['stage'], y=df_o['score'], marker_color=['#60a5fa', '#3b82f6', '#2563eb'])])
+                fig2.update_yaxes(range=[0, 5.5])
+                fig2.update_layout(height=350, margin=dict(t=30, b=30))
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.warning("OEI 단계별 점수를 추출하지 못했습니다.")
 
-    # [TAB 2] 리더십 진단 심층분석
+    # [Tab 2] 리더십 심층분석
     with tabs[1]:
-        st.subheader("리더십 상세 분석")
+        st.subheader("리더십 역량 상세")
+        df_l = pd.DataFrame(data['leadership']['details'])
+        if not df_l.empty:
+            fig3 = go.Figure()
+            fig3.add_trace(go.Bar(x=df_l['category'], y=df_l['self'], name='본인'))
+            fig3.add_trace(go.Bar(x=df_l['category'], y=df_l['group'], name='구성원'))
+            fig3.update_layout(barmode='group', height=400)
+            st.plotly_chart(fig3, use_container_width=True)
         
-        df_detail = pd.DataFrame(data['leadership']['details'])
-        if not df_detail.empty:
-            st.markdown("##### 1. 항목별 점수 및 인식 차이 (Self - Group)")
-            fig_diff = go.Figure()
-            fig_diff.add_trace(go.Bar(x=df_detail['category'], y=df_detail['self'], name='본인', marker_color='#2563eb'))
-            fig_diff.add_trace(go.Bar(x=df_detail['category'], y=df_detail['group'], name='구성원', marker_color='#94a3b8'))
-            fig_diff.update_layout(barmode='group', height=400, margin=dict(t=20, b=50))
-            st.plotly_chart(fig_diff, use_container_width=True)
-        
-        st.markdown("---")
-        st.markdown("##### 2. 주관식 코멘트 분석")
-        lc1, lc2 = st.columns(2)
-        with lc1:
-            st.info("**상사의 기대사항**")
-            for c in data['leadership']['comments'].get('boss', []): st.write(f"- {c}")
-        with lc2:
-            st.success("**구성원의 목소리**")
-            for c in data['leadership']['comments'].get('members', []): st.write(f"- {c}")
+        st.divider()
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.info("🗣️ 상사의 기대사항")
+            if data['leadership']['comments']['boss']:
+                for c in data['leadership']['comments']['boss']: st.write(f"- {c}")
+            else: st.write("(추출된 데이터 없음)")
+            
+        with col_b:
+            st.success("🗣️ 구성원의 목소리")
+            if data['leadership']['comments']['members']:
+                for c in data['leadership']['comments']['members']: st.write(f"- {c}")
+            else: st.write("(추출된 데이터 없음)")
 
-    # [TAB 3] 조직효과성 진단 심층분석
+    # [Tab 3] OEI 심층분석
     with tabs[2]:
-        st.subheader("조직 효과성(OEI) 상세 분석")
-        
-        st.markdown("##### 1. 인식 차이 (Blind Spot)")
-        gap_data = data['oei'].get('gaps', [])
-        if gap_data:
-            gap_df = pd.DataFrame(gap_data)
-            def color_type(val):
-                if val == 'Underestimation': return 'color: green; font-weight: bold'
-                if val == 'Overestimation': return 'color: red; font-weight: bold'
-                return ''
+        st.subheader("인식 차이 (Blind Spot) 분석")
+        gap_df = pd.DataFrame(data['oei']['gaps'])
+        if not gap_df.empty:
+            def highlight_type(val):
+                color = 'green' if val == 'Underestimation' else 'red'
+                return f'color: {color}; font-weight: bold'
             
             st.dataframe(
-                gap_df[['category', 'self', 'team', 'type']].style.applymap(color_type, subset=['type']),
-                use_container_width=True
+                gap_df[['category', 'self', 'team', 'type']].style.applymap(highlight_type, subset=['type']),
+                use_container_width=True,
+                column_config={
+                    "category": "진단 항목",
+                    "self": "본인 점수",
+                    "team": "팀원 점수",
+                    "type": "유형 (과소/과대평가)"
+                }
             )
         else:
-            st.info("특이한 인식 차이가 발견되지 않았습니다. (데이터가 없거나 일치함)")
+            st.info("💡 본인과 팀원 간의 유의미한 점수 차이(0.5점 이상)가 발견되지 않았습니다.")
+            
+        st.divider()
+        c_str, c_weak = st.columns(2)
+        with c_str:
+            st.success("💪 우리 팀 강점")
+            if data['oei']['comments']['strength']:
+                for c in data['oei']['comments']['strength']: st.write(f"• {c}")
+            else: st.write("(데이터 없음)")
+            
+        with c_weak:
+            st.error("⚠️ 보완 필요점")
+            if data['oei']['comments']['weakness']:
+                for c in data['oei']['comments']['weakness']: st.write(f"• {c}")
+            else: st.write("(데이터 없음)")
 
-        st.markdown("---")
-        st.markdown("##### 2. 팀 강점 및 보완점")
-        oc1, oc2 = st.columns(2)
-        with oc1:
-            st.success("**팀 강점**")
-            for c in data['oei']['comments'].get('strength', []): st.write(f"💪 {c}")
-        with oc2:
-            st.error("**보완 필요점**")
-            for c in data['oei']['comments'].get('weakness', []): st.write(f"⚠️ {c}")
-
-    # [TAB 4] AI 코칭
+    # [Tab 4] AI 코칭
     with tabs[3]:
-        st.subheader("💬 AI 리더십 코치")
+        st.subheader("💬 AI 코칭 대화")
         
-        chat_container = st.container()
-        with chat_container:
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]):
-                    st.write(msg["content"])
+        # 채팅 히스토리
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
         
-        if prompt := st.chat_input("답변을 입력하세요..."):
-            if not OPENAI_API_KEY:
-                st.error("API Key가 설정되지 않았습니다.")
-            else:
-                st.chat_message("user").write(prompt)
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                
+        # 입력창
+        if prompt := st.chat_input("답변을 입력해주세요..."):
+            # 1. 사용자 메시지 추가 및 표시
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.write(prompt)
+            
+            # 2. AI 응답 생성
+            if OPENAI_API_KEY:
                 try:
                     client = openai.OpenAI(api_key=OPENAI_API_KEY)
-                    system_instruction = f"""
-                    너는 SK그룹의 리더십 코치야. 사용자의 진단 데이터: {data}
-                    GROW 모델로 코칭하고, 인식 차이({data['oei']['gaps']})와 보완점({data['oei']['comments'].get('weakness')})을 해결하는 질문을 던져줘.
+                    
+                    # 시스템 프롬프트 구성
+                    system_msg = f"""
+                    당신은 SK그룹의 리더십 전문 코치입니다.
+                    사용자의 진단 데이터: {data}
+                    
+                    특히 다음 사항을 중심으로 코칭하세요:
+                    1. 인식 차이 항목: {data['oei']['gaps']}
+                    2. 구성원들이 지적한 보완점: {data['oei']['comments']['weakness']}
+                    
+                    대화 가이드:
+                    - GROW 모델(Goal -> Reality -> Options -> Will)을 따르세요.
+                    - 한번에 하나씩 질문하여 사용자가 스스로 생각하게 유도하세요.
+                    - 공감하는 태도로 대화하세요.
                     """
                     
-                    messages_payload = [{"role": "system", "content": system_instruction}] + st.session_state.messages
+                    api_messages = [{"role": "system", "content": system_msg}]
+                    for m in st.session_state.messages:
+                        api_messages.append({"role": m["role"], "content": m["content"]})
                     
                     with st.chat_message("assistant"):
                         stream = client.chat.completions.create(
-                            model="gpt-5-nano",
-                            messages=messages_payload,
+                            model="gpt-4o", 
+                            messages=api_messages,
                             stream=True
                         )
                         response = st.write_stream(stream)
                     
                     st.session_state.messages.append({"role": "assistant", "content": response})
+                    
                 except Exception as e:
-                    st.error(f"오류: {e}")
+                    st.error(f"AI 응답 오류: {e}")
+            else:
+                st.warning("API Key가 없어서 AI가 응답할 수 없습니다.")
