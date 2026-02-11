@@ -96,11 +96,11 @@ def parse_columns(df):
             
     return meta_cols, member_scores, peer_scores, text_cols
 
-# --- [MODIFIED] 커스텀 메트릭 함수 (화살표 옵션 추가, 가독성 개선) ---
+# --- [MODIFIED] 커스텀 메트릭 함수 (화살표 옵션 추가, 다크모드 호환성 개선) ---
 def custom_metric(label, value, delta=None, delta_color="normal", show_arrow=False):
     """
     HTML/CSS를 사용하여 지표를 표시합니다.
-    show_arrow=True일 경우 화살표를 표시하고, False일 경우 색상만 적용합니다.
+    하드코딩된 색상을 제거하여 다크모드에서도 잘 보이게 합니다.
     """
     delta_html = ""
     if delta:
@@ -109,30 +109,32 @@ def custom_metric(label, value, delta=None, delta_color="normal", show_arrow=Fal
             if match:
                 delta_val = float(match.group(1))
                 
-                # 색상 결정
-                text_color = "#666" # 기본 회색
+                # 색상 결정 (Streamlit 기본 Metric 색상과 유사하게 설정)
+                # Green: #09ab3b, Red: #ff2b2b
+                text_color = "inherit" 
                 arrow_char = ""
                 
                 if delta_val > 0:
-                    if delta_color == "normal": text_color = "#009933" # 초록
-                    elif delta_color == "inverse": text_color = "#cc0000" # 빨강
+                    if delta_color == "normal": text_color = "#09ab3b" # Green
+                    elif delta_color == "inverse": text_color = "#ff2b2b" # Red
                     arrow_char = "↑" if show_arrow else ""
                 elif delta_val < 0:
-                    if delta_color == "normal": text_color = "#cc0000" # 빨강
-                    elif delta_color == "inverse": text_color = "#009933" # 초록
+                    if delta_color == "normal": text_color = "#ff2b2b" # Red
+                    elif delta_color == "inverse": text_color = "#09ab3b" # Green
                     arrow_char = "↓" if show_arrow else ""
                 
                 # 델타 값 포맷팅
                 delta_str = f"{arrow_char} {delta}" if show_arrow else f"{delta}"
                 delta_html = f'<span style="color: {text_color}; font-size: 1rem; margin-left: 8px; font-weight: 600;">{delta_str}</span>'
         except:
-            delta_html = f'<span style="color: #666; font-size: 1rem; margin-left: 8px;">{delta}</span>'
+            delta_html = f'<span style="font-size: 1rem; margin-left: 8px; opacity: 0.7;">{delta}</span>'
 
+    # CSS에서 color를 명시하지 않음으로써 테마 색상을 따르게 함
     html_code = f"""
     <div style="display: flex; flex-direction: column; margin-bottom: 1.5rem;">
-        <span style="font-size: 1rem; color: #555; font-weight: 500; margin-bottom: 4px;">{label}</span>
+        <span style="font-size: 1rem; font-weight: 500; margin-bottom: 4px; opacity: 0.8;">{label}</span>
         <div style="display: flex; align-items: baseline;">
-            <span style="font-size: 2.2rem; font-weight: 700; color: #262730;">{value}</span>
+            <span style="font-size: 2.2rem; font-weight: 700;">{value}</span>
             {delta_html}
         </div>
     </div>
@@ -280,6 +282,7 @@ if df is not None and selected_leader_name:
                 "Year": sorted_years,
                 "Score": [avg_scores[y] for y in sorted_years]
             })
+            # text="Score" 추가: 점수 레이블 표시
             fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5], text="Score")
             fig_line.update_traces(line_color='#2563eb', line_width=3, textposition="top center", texttemplate='%{text:.2f}')
             st.plotly_chart(fig_line, use_container_width=True)
