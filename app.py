@@ -131,7 +131,6 @@ if df is not None and selected_leader_name:
     raw_competencies = [col.replace(f"_{latest_year}", "") for col in member_map[latest_year]]
     
     # 그룹별 점수 계산을 위한 매핑 생성
-    # normalized_target -> actual_excel_name
     norm_comp_map = {normalize_text(c): c for c in raw_competencies}
     
     # 연도별/그룹별 점수 계산
@@ -153,10 +152,7 @@ if df is not None and selected_leader_name:
         for group_name, sub_items in COMPETENCY_GROUPS.items():
             scores = []
             for item in sub_items:
-                # 엑셀의 실제 컬럼명 찾기 (유연한 매칭)
                 norm_item = normalize_text(item)
-                
-                # 직접 매칭 시도
                 target_col = None
                 if item in year_detail_data:
                     target_col = item
@@ -184,25 +180,51 @@ if df is not None and selected_leader_name:
     with tab1:
         st.subheader("Overview (구성원 응답 기준)")
         
-        # 1-1. 상단 지표
+        # 1-1. 상단 지표 (5개 Metric)
         avg_scores = {y: pd.Series(detailed_scores[y]).mean() for y in sorted_years}
         
-        col1, col2, col3 = st.columns(3)
-        
+        # 데이터 준비
         curr_score = avg_scores[latest_year]
         prev_year = sorted_years[-2] if len(sorted_years) > 1 else None
-        prev_score = avg_scores[prev_year] if prev_year else 0
-        delta = curr_score - prev_score if prev_year else 0
         
-        col1.metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta:+.2f} ({prev_year} 대비)")
+        # 종합 점수 Delta
+        delta_total = (curr_score - avg_scores[prev_year]) if prev_year else 0
         
-        # 강/약점 (최신 구성원 응답 기준)
+        # 강점/약점
         latest_series = pd.Series(detailed_scores[latest_year])
         top_comp = latest_series.idxmax()
         bot_comp = latest_series.idxmin()
         
-        col2.metric("최고 강점 역량", top_comp, f"{latest_series[top_comp]:.1f}")
-        col3.metric("보완 필요 역량", bot_comp, f"{latest_series[bot_comp]:.1f}", delta_color="inverse")
+        # 상승/하락폭 계산
+        max_inc_comp, max_inc_val = "-", 0
+        max_dec_comp, max_dec_val = "-", 0
+        
+        if prev_year:
+            prev_series = pd.Series(detailed_scores[prev_year])
+            diff_series = latest_series - prev_series
+            diff_series = diff_series.dropna()
+            
+            if not diff_series.empty:
+                max_inc_comp = diff_series.idxmax()
+                max_inc_val = diff_series.max()
+                
+                max_dec_comp = diff_series.idxmin()
+                max_dec_val = diff_series.min()
+
+        # 지표 출력 (5 Columns)
+        m1, m2, m3, m4, m5 = st.columns(5)
+        
+        m1.metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta_total:+.2f} ({prev_year} 대비)")
+        m2.metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}")
+        m3.metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}", delta_color="inverse")
+        
+        # 전년 대비 상승/하락 (값이 있을 때만 표시)
+        if prev_year:
+            m4.metric(f"📈 급상승 ({prev_year} 대비)", max_inc_comp, f"{max_inc_val:+.1f}")
+            m5.metric(f"📉 급하락 ({prev_year} 대비)", max_dec_comp, f"{max_dec_val:+.1f}", delta_color="inverse")
+        else:
+            m4.metric("📈 급상승", "-", "-")
+            m5.metric("📉 급하락", "-", "-")
         
         st.divider()
         
@@ -215,6 +237,7 @@ if df is not None and selected_leader_name:
                 "Year": sorted_years,
                 "Score": [avg_scores[y] for y in sorted_years]
             })
+            # text="Score" 추가: 점수 레이블 표시
             fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5], text="Score")
             fig_line.update_traces(line_color='#2563eb', line_width=3, textposition="top center", texttemplate='%{text:.2f}')
             st.plotly_chart(fig_line, use_container_width=True)
@@ -253,7 +276,6 @@ if df is not None and selected_leader_name:
                 comments_text += f"\n[{year} 피드백]\n"
                 for col in text_map[year]:
                     val = leader_data[col]
-                    # 값이 있고, 0이나 빈칸이 아닌 경우만
                     if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
                         clean_col = col.replace(f"_{year}", "")
                         comments_text += f"- {clean_col}: {val}\n"
