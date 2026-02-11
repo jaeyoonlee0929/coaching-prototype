@@ -34,7 +34,7 @@ def extract_text_from_pdf(file):
         st.error(f"PDF 읽기 오류: {e}")
         return ""
 
-# --- 1. 리더십 진단 파싱 로직 (Final Version) ---
+# --- 1. 리더십 진단 파싱 로직 (거리 제한 방식) ---
 def parse_leadership_report(text):
     data = {
         "summary": 0.0,
@@ -42,21 +42,21 @@ def parse_leadership_report(text):
         "comments": {"boss": [], "members": []}
     }
     
-    # 공백 제거 텍스트 (검색 정확도 향상용)
+    # 공백 제거 (검색 정확도 향상)
     clean_text = re.sub(r'\s+', '', text)
     
     # [항목 매핑] PDF 내 실제 텍스트(공백제거) : 화면 표시 이름
-    # 보내주신 리포트 기준 정확한 명칭 사용
+    # 보내주신 캡처본 기준 정확한 명칭
     items_map = [
         ("SKMS에대한확신", "SKMS 확신"),
         ("패기/솔선수범", "패기/솔선수범"),
         ("Integrity", "Integrity"),
         ("경영환경이해", "경영환경 이해"),
-        ("팀목표방향수립", "팀 목표 수립"), # '방향' 포함 주의
+        ("팀목표방향수립", "팀 목표 수립"),      # 수정됨
         ("변화주도", "변화 주도"),
-        ("도전적목표설정", "도전적 목표"), # '설정' 포함 주의
+        ("도전적목표설정", "도전적 목표"),      # 수정됨
         ("팀워크발휘", "팀워크 발휘"),
-        ("과감하고빠른실행", "과감한 실행"), # '빠른' 포함 주의
+        ("과감하고빠른실행", "과감한 실행"),    # 수정됨
         ("자율적업무환경조성", "자율환경 조성"),
         ("소통", "소통"),
         ("구성원육성", "구성원 육성")
@@ -65,15 +65,17 @@ def parse_leadership_report(text):
     scores = []
     
     for pdf_key, label in items_map:
-        # 패턴: 항목명 ... 본인점수(x.x) ... 그룹점수(x.x)
-        # 예: 팀목표방향수립 ... (세부내용) ... 4.7 ... 4.5
-        # 전체 텍스트에서 검색하되, 점수 패턴이 명확한지 확인
-        try:
-            # re.DOTALL: 줄바꿈 무시하고 검색
-            pattern = re.compile(rf"{re.escape(pdf_key)}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
-            match = pattern.search(clean_text)
-            
-            if match:
+        # 정규표현식 설명:
+        # 1. pdf_key (항목명) 찾음
+        # 2. .{0,150}? : 그 뒤에 오는 문자열이 0~150자 이내 (너무 멀리 있는 숫자는 무시)
+        # 3. ([0-5]\.\d) : 0.0 ~ 5.9 사이의 소수점 숫자 (본인 점수)
+        # 4. .{0,50}? : 그 뒤 50자 이내
+        # 5. ([0-5]\.\d) : 그룹 점수
+        pattern = re.compile(rf"{re.escape(pdf_key)}.{0,150}?([0-5]\.\d).{0,50}?([0-5]\.\d)", re.DOTALL)
+        match = pattern.search(clean_text)
+        
+        if match:
+            try:
                 self_val = float(match.group(1))
                 group_val = float(match.group(2))
                 
@@ -83,10 +85,11 @@ def parse_leadership_report(text):
                     "group": group_val
                 })
                 scores.append(self_val)
-            else:
-                # 못 찾았을 경우 0.0 처리 (순서 유지 위해)
+            except ValueError:
+                # 숫자가 아닌 경우 0 처리
                 data["details"].append({"category": label, "self": 0.0, "group": 0.0})
-        except:
+        else:
+            # 매칭 실패 시 0 처리 (순서 유지)
             data["details"].append({"category": label, "self": 0.0, "group": 0.0})
             
     # 종합 점수 (평균)
@@ -136,7 +139,7 @@ def parse_leadership_report(text):
 
     return data
 
-# --- 2. OEI 진단 파싱 로직 (Final Version) ---
+# --- 2. OEI 진단 파싱 로직 (Snapshot 기반) ---
 def parse_oei_report(text):
     data = {
         "summary": 0.0,
@@ -148,23 +151,19 @@ def parse_oei_report(text):
     clean_text = re.sub(r'\s+', '', text)
     
     # 1. 종합 점수 추출
-    # 패턴: 【조직 효과성 점수 4.6점】 또는 [조직효과성점수4.6점]
+    # 패턴: 【조직 효과성 점수 4.6점】
     match_total = re.search(r"조직효과성점수([0-5]\.\d)", clean_text)
     if match_total:
         data["summary"] = float(match_total.group(1))
     
-    # 2. I-P-O 단계별 점수 추출 (Snapshot 섹션)
-    # Snapshot 페이지에서 Input, Process, Output 점수가 큰 글씨로 나옴
-    # 순서: Input ... (점수) ... Process ... (점수) ... Output ... (점수)
-    
+    # 2. I-P-O 단계별 점수 추출
+    # "Snapshot" 섹션 근처에서 찾기
     if "Snapshot" in clean_text:
+        # Snapshot 이후 텍스트
         snapshot_section = clean_text.split("Snapshot")[-1]
-        # 다음 섹션(문항별점수) 전까지만
-        if "문항별점수" in snapshot_section:
-            snapshot_section = snapshot_section.split("문항별점수")[0]
-            
-        # 정규표현식으로 순서대로 추출 시도
-        # Input4.6 ... Process4.5 ... Output4.7
+        
+        # Input...숫자...Process...숫자...Output...숫자 패턴 찾기
+        # 중간에 텍스트가 섞여있어도 순서는 항상 Input -> Process -> Output
         ipo_pattern = re.search(r"Input.*?([0-5]\.\d).*?Process.*?([0-5]\.\d).*?Output.*?([0-5]\.\d)", snapshot_section)
         
         if ipo_pattern:
@@ -174,7 +173,7 @@ def parse_oei_report(text):
                 {"stage": "Output", "score": float(ipo_pattern.group(3))}
             ]
         else:
-            # 개별 검색 (Fallback)
+            # 패턴 매칭 실패 시 개별 검색 (Fallback)
             m_in = re.search(r"Input.*?([0-5]\.\d)", snapshot_section)
             m_pr = re.search(r"Process.*?([0-5]\.\d)", snapshot_section)
             m_ou = re.search(r"Output.*?([0-5]\.\d)", snapshot_section)
@@ -200,7 +199,8 @@ def parse_oei_report(text):
     ]
     
     for item in oei_items:
-        pattern = re.compile(rf"{re.escape(item)}.*?([0-5]\.\d).*?([0-5]\.\d)", re.DOTALL)
+        # 거리 제한을 둔 정규표현식 사용
+        pattern = re.compile(rf"{re.escape(item)}.{0,100}?([0-5]\.\d).{0,50}?([0-5]\.\d)", re.DOTALL)
         match = pattern.search(clean_text)
         
         if match:
@@ -269,6 +269,10 @@ with st.sidebar:
     if st.button("🔄 초기화"):
         st.session_state.clear()
         st.rerun()
+    
+    # [디버깅용] 파일 내용 확인 (필요시 주석 해제)
+    # if leadership_file:
+    #     st.text_area("Debug: Leadership Raw Text", extract_text_from_pdf(leadership_file)[:500])
 
 # --- 메인 로직 ---
 
@@ -317,7 +321,7 @@ else:
             st.markdown("##### 리더십 역량 (Radar)")
             df_l = pd.DataFrame(data['leadership']['details'])
             if not df_l.empty:
-                # 0점인 데이터는 제외하고 그리기 (혹시 모를 오류 대비)
+                # 0점 제외하고 그리기
                 df_l_valid = df_l[df_l['self'] > 0]
                 if not df_l_valid.empty:
                     fig = go.Figure()
@@ -326,7 +330,7 @@ else:
                     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), margin=dict(t=30, b=30), height=350)
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.warning("유효한 리더십 상세 데이터가 없습니다.")
+                    st.warning("유효한 리더십 상세 데이터를 찾지 못했습니다. 리포트 형식을 확인해주세요.")
             else:
                 st.warning("리더십 상세 데이터를 찾지 못했습니다.")
         
@@ -351,11 +355,14 @@ else:
         df_l = pd.DataFrame(data['leadership']['details'])
         if not df_l.empty:
             df_l_valid = df_l[df_l['self'] > 0]
-            fig3 = go.Figure()
-            fig3.add_trace(go.Bar(x=df_l_valid['category'], y=df_l_valid['self'], name='본인'))
-            fig3.add_trace(go.Bar(x=df_l_valid['category'], y=df_l_valid['group'], name='구성원'))
-            fig3.update_layout(barmode='group', height=400)
-            st.plotly_chart(fig3, use_container_width=True)
+            if not df_l_valid.empty:
+                fig3 = go.Figure()
+                fig3.add_trace(go.Bar(x=df_l_valid['category'], y=df_l_valid['self'], name='본인'))
+                fig3.add_trace(go.Bar(x=df_l_valid['category'], y=df_l_valid['group'], name='구성원'))
+                fig3.update_layout(barmode='group', height=400)
+                st.plotly_chart(fig3, use_container_width=True)
+            else:
+                st.info("데이터 추출 실패")
         
         st.divider()
         col_a, col_b = st.columns(2)
