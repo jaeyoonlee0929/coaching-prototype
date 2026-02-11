@@ -34,7 +34,7 @@ COMPETENCY_GROUPS = {
     ],
     "과감한 돌파와 실행": [
         "SUPEX 목표 설정",
-        "내·외부 폭넓은 협업", # 엑셀 데이터 매칭을 위해 유연하게 처리 예정
+        "내·외부 폭넓은 협업", 
         "신속한 실행 및 성과 창출"
     ],
     "VWBE 문화구축": [
@@ -74,7 +74,6 @@ def parse_columns(df):
     member_pattern = re.compile(r"^(.*)_(\d{2}년)$")
     
     for col in df.columns:
-        # 동료 응답 확인
         peer_match = peer_pattern.match(col)
         if peer_match:
             year = peer_match.group(2)
@@ -83,7 +82,6 @@ def parse_columns(df):
                 peer_scores[year].append(col)
             continue
             
-        # 구성원 응답 확인
         member_match = member_pattern.match(col)
         if member_match:
             year = member_match.group(2)
@@ -127,25 +125,26 @@ if df is not None and selected_leader_name:
     latest_year = sorted_years[-1]
     
     # 2. 역량 매핑 및 데이터 추출
-    # 실제 엑셀에 있는 역량명 리스트 (최신 연도 기준)
     raw_competencies = [col.replace(f"_{latest_year}", "") for col in member_map[latest_year]]
-    
-    # 그룹별 점수 계산을 위한 매핑 생성
     norm_comp_map = {normalize_text(c): c for c in raw_competencies}
     
-    # 연도별/그룹별 점수 계산
-    grouped_scores = {} # {year: {GroupA: 4.5, GroupB: 3.2 ...}}
-    detailed_scores = {} # {year: {CompA: 4.5 ...}} (기존 상세 점수)
+    grouped_scores = {}
+    detailed_scores = {} 
 
     for year in sorted_years:
         year_group_data = {}
         year_detail_data = {}
         
-        # 상세 점수 추출
+        # 상세 점수 추출 (0점 제외 로직 추가 가능)
         for col in member_map[year]:
             if "_동료_" in col: continue
             comp_name = col.replace(f"_{year}", "")
-            year_detail_data[comp_name] = leader_data[col]
+            val = leader_data[col]
+            # 유효한 점수만 저장 (NaN이나 0 제외)
+            if pd.notna(val) and val > 0:
+                year_detail_data[comp_name] = val
+            else:
+                year_detail_data[comp_name] = 0 # 계산을 위해 0으로 둠
         detailed_scores[year] = year_detail_data
         
         # 그룹별 평균 계산
@@ -161,7 +160,7 @@ if df is not None and selected_leader_name:
                 
                 if target_col:
                     val = year_detail_data[target_col]
-                    if pd.notna(val):
+                    if val > 0: # 0점은 평균 계산에서 제외
                         scores.append(val)
             
             if scores:
@@ -180,51 +179,60 @@ if df is not None and selected_leader_name:
     with tab1:
         st.subheader("Overview (구성원 응답 기준)")
         
-        # 1-1. 상단 지표 (5개 Metric)
-        avg_scores = {y: pd.Series(detailed_scores[y]).mean() for y in sorted_years}
-        
-        # 데이터 준비
+        # 1-1. 상단 지표 계산
+        # 연도별 평균 점수 (0점 제외하고 계산)
+        avg_scores = {}
+        for y in sorted_years:
+            vals = [v for v in detailed_scores[y].values() if v > 0]
+            avg_scores[y] = sum(vals) / len(vals) if vals else 0
+
         curr_score = avg_scores[latest_year]
         prev_year = sorted_years[-2] if len(sorted_years) > 1 else None
         
-        # 종합 점수 Delta
         delta_total = (curr_score - avg_scores[prev_year]) if prev_year else 0
         
-        # 강점/약점
+        # 강점/약점 (최신)
         latest_series = pd.Series(detailed_scores[latest_year])
-        top_comp = latest_series.idxmax()
-        bot_comp = latest_series.idxmin()
+        latest_series = latest_series[latest_series > 0] # 0점 제외
         
-        # 상승/하락폭 계산
+        if not latest_series.empty:
+            top_comp = latest_series.idxmax()
+            bot_comp = latest_series.idxmin()
+        else:
+            top_comp, bot_comp = "-", "-"
+
+        # 급상승/급하락 계산
         max_inc_comp, max_inc_val = "-", 0
         max_dec_comp, max_dec_val = "-", 0
         
         if prev_year:
-            prev_series = pd.Series(detailed_scores[prev_year])
-            diff_series = latest_series - prev_series
-            diff_series = diff_series.dropna()
+            curr_s = pd.Series(detailed_scores[latest_year])
+            prev_s = pd.Series(detailed_scores[prev_year])
             
-            if not diff_series.empty:
-                max_inc_comp = diff_series.idxmax()
-                max_inc_val = diff_series.max()
+            # 두 연도 모두 0보다 큰 데이터만 비교
+            valid_idx = curr_s[(curr_s > 0) & (prev_s > 0)].index
+            if not valid_idx.empty:
+                diff_series = curr_s[valid_idx] - prev_s[valid_idx]
                 
-                max_dec_comp = diff_series.idxmin()
-                max_dec_val = diff_series.min()
+                # 가장 큰 상승 (양수 최대값)
+                if diff_series.max() > 0:
+                    max_inc_comp = diff_series.idxmax()
+                    max_inc_val = diff_series.max()
+                
+                # 가장 큰 하락 (음수 최소값)
+                if diff_series.min() < 0:
+                    max_dec_comp = diff_series.idxmin()
+                    max_dec_val = diff_series.min()
 
-        # 지표 출력 (5 Columns)
+        # 지표 출력
         m1, m2, m3, m4, m5 = st.columns(5)
         
         m1.metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta_total:+.2f} ({prev_year} 대비)")
-        m2.metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}")
-        m3.metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}", delta_color="inverse")
+        m2.metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}" if top_comp != "-" else "-")
+        m3.metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}" if bot_comp != "-" else "-", delta_color="inverse")
         
-        # 전년 대비 상승/하락 (값이 있을 때만 표시)
-        if prev_year:
-            m4.metric(f"📈 급상승 ({prev_year} 대비)", max_inc_comp, f"{max_inc_val:+.1f}")
-            m5.metric(f"📉 급하락 ({prev_year} 대비)", max_dec_comp, f"{max_dec_val:+.1f}", delta_color="inverse")
-        else:
-            m4.metric("📈 급상승", "-", "-")
-            m5.metric("📉 급하락", "-", "-")
+        m4.metric(f"📈 급상승 ({prev_year} 대비)", max_inc_comp, f"{max_inc_val:+.1f}" if max_inc_comp != "-" else "-")
+        m5.metric(f"📉 급하락 ({prev_year} 대비)", max_dec_comp, f"{max_dec_val:+.1f}" if max_dec_comp != "-" else "-", delta_color="inverse")
         
         st.divider()
         
@@ -237,7 +245,6 @@ if df is not None and selected_leader_name:
                 "Year": sorted_years,
                 "Score": [avg_scores[y] for y in sorted_years]
             })
-            # text="Score" 추가: 점수 레이블 표시
             fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5], text="Score")
             fig_line.update_traces(line_color='#2563eb', line_width=3, textposition="top center", texttemplate='%{text:.2f}')
             st.plotly_chart(fig_line, use_container_width=True)
@@ -247,7 +254,6 @@ if df is not None and selected_leader_name:
             fig_radar = go.Figure()
             colors = ['#cbd5e1', '#94a3b8', '#2563eb'] # 연한색 -> 진한색
             
-            # 그룹 카테고리 순서 정의
             categories = list(COMPETENCY_GROUPS.keys())
             
             for i, year in enumerate(sorted_years):
@@ -318,10 +324,8 @@ if df is not None and selected_leader_name:
     with tab3:
         st.subheader("💬 AI 리더십 코칭")
         
-        # 채팅 히스토리 표시 영역
         chat_container = st.container()
         
-        # 채팅 기록 초기화
         if "messages" not in st.session_state:
             st.session_state.messages = []
             welcome = f"{selected_leader_name} 임원님, 반갑습니다.\n\n"
