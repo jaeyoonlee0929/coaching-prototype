@@ -301,12 +301,23 @@ if df is not None and selected_leader_name:
         
         if "messages" not in st.session_state:
             st.session_state.messages = []
-            welcome = f"{selected_leader_name} 임원님, 반갑습니다.\n\n"
-            welcome += f"최근({latest_year}) 구성원 평가 기준 종합 점수는 **{curr_score:.2f}점**입니다. "
             
-            # 여기서 delta_total을 사용하면 됨 (이미 계산됨)
-            if delta_total > 0: welcome += "전년 대비 상승했습니다. 📈"
-            elif delta_total < 0: welcome += "전년 대비 다소 하락했습니다. 📉"
+            # 초기 환영 메시지 및 제안
+            welcome = f"{selected_leader_name} 임원님, 반갑습니다. 3년치 리더십 데이터 분석을 완료했습니다.\n\n"
+            welcome += f"최근({latest_year}) 구성원 평가 기준 종합 점수는 **{curr_score:.2f}점**입니다. "
+            if delta_total > 0: welcome += "전년 대비 상승했습니다. 📈\n\n"
+            elif delta_total < 0: welcome += "전년 대비 다소 하락했습니다. 📉\n\n"
+            
+            welcome += "현재 가장 고민되시는 리더십 이슈는 무엇인가요? 편하게 말씀해 주시면 대화를 시작하겠습니다.\n\n"
+            
+            # 선택 가능한 프롬프트 제안 (최초 1회)
+            welcome += """---
+            💡 **추가로 논의할 수 있는 주제들** (아래 내용을 복사해서 질문하시면 심도 있게 다뤄드립니다)
+            * 📚 **이론 학습:** 현재 나의 약점과 관련된 최신 리더십 이론이나 아티클을 추천해 주세요.
+            * 🎬 **영상 추천:** 리더십 개발에 도움이 될 만한 TED 강연이나 교육 영상을 추천해 주세요.
+            * 🗓️ **W/S 제안:** 팀원들과 소통을 강화하기 위한 워크숍 아젠다를 제안해 주세요.
+            (질문 중 원하는 내용을 복사 붙여넣기 하시면 추가로 진행하겠습니다)
+            """
             
             st.session_state.messages.append({"role": "assistant", "content": welcome})
             
@@ -327,13 +338,22 @@ if df is not None and selected_leader_name:
                     qual_context = st.session_state.get('qualitative_analysis', "")
                     
                     sys_msg = f"""
-                    당신은 임원 전용 코치입니다.
-                    대상: {selected_leader_name}
-                    정량 데이터(구성원 기준): {avg_scores}
-                    강점: {top_comp}, 약점: {bot_comp}
-                    주관식 분석: {qual_context}
+                    당신은 대기업 임원 전용 전문 리더십 코치(Executive Coach)입니다.
+                    대상: {selected_leader_name} 임원
                     
-                    GROW 모델로 코칭하고, 임원의 언어를 사용하세요.
+                    [정량 데이터]
+                    - 3년치 점수 추이: {avg_scores}
+                    - 최신 강점: {top_comp}, 약점: {bot_comp}
+                    
+                    [정성 피드백 요약]
+                    {qual_context}
+                    
+                    [대화 및 응답 가이드]
+                    1. **전문가 페르소나:** 실제 코칭 세션처럼 정중하고 깊이 있는 통찰을 제공하세요. 단순한 답변보다는 사용자의 생각을 확장시키는 질문을 던지세요.
+                    2. **추가 제안 (옵션):** 사용자가 특정 약점이나 개발 포인트에 대해 고민할 때만, 관련된 이론 학습, 영상 추천, 워크숍 일정 등을 제안하세요. (매번 할 필요 없음)
+                    3. **Next Step 질문 (필수):** 답변의 마지막에는 항상 코칭 기법(GROW, 질문법 등)을 활용하여 상황에 맞는 심화 질문을 던지세요.
+                       - 문구 예시: (해당 질문에 답을 해주시면 다음 단계로 이어나가 보겠습니다)
+                       - 주의: 구체적으로 어떤 코칭 모델을 썼는지는 밝히지 마세요.
                     """
                     
                     msgs = [{"role": "system", "content": sys_msg}] + st.session_state.messages
