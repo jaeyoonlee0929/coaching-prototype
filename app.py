@@ -163,8 +163,10 @@ if df is not None and selected_leader_name:
                 "Year": sorted_years,
                 "Score": [avg_scores[y] for y in sorted_years]
             })
-            fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5])
-            fig_line.update_traces(line_color='#2563eb', line_width=3)
+            # text="Score" 추가: 점수 레이블 표시
+            fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5], text="Score")
+            # textposition="top center": 점수 위치 조정, texttemplate: 소수점 포맷
+            fig_line.update_traces(line_color='#2563eb', line_width=3, textposition="top center", texttemplate='%{text:.2f}')
             st.plotly_chart(fig_line, use_container_width=True)
             
         with c2:
