@@ -96,15 +96,14 @@ def parse_columns(df):
             
     return meta_cols, member_scores, peer_scores, text_cols
 
-# --- [NEW] 커스텀 메트릭 함수 (화살표 제거, 색상 유지) ---
-def custom_metric(label, value, delta=None, delta_color="normal"):
+# --- [MODIFIED] 커스텀 메트릭 함수 (화살표 옵션 추가, 가독성 개선) ---
+def custom_metric(label, value, delta=None, delta_color="normal", show_arrow=False):
     """
-    st.metric 대신 HTML을 사용하여 지표를 표시합니다.
-    화살표 없이 텍스트 색상으로 증감을 표현합니다.
+    HTML/CSS를 사용하여 지표를 표시합니다.
+    show_arrow=True일 경우 화살표를 표시하고, False일 경우 색상만 적용합니다.
     """
     delta_html = ""
     if delta:
-        # 숫자 추출하여 양수/음수 판단
         try:
             match = re.search(r"([+-]?\d+\.?\d*)", str(delta))
             if match:
@@ -112,23 +111,28 @@ def custom_metric(label, value, delta=None, delta_color="normal"):
                 
                 # 색상 결정
                 text_color = "#666" # 기본 회색
+                arrow_char = ""
+                
                 if delta_val > 0:
                     if delta_color == "normal": text_color = "#009933" # 초록
                     elif delta_color == "inverse": text_color = "#cc0000" # 빨강
+                    arrow_char = "↑" if show_arrow else ""
                 elif delta_val < 0:
                     if delta_color == "normal": text_color = "#cc0000" # 빨강
                     elif delta_color == "inverse": text_color = "#009933" # 초록
+                    arrow_char = "↓" if show_arrow else ""
                 
-                delta_html = f'<span style="color: {text_color}; font-size: 0.9rem; margin-left: 8px; font-weight: 600;">{delta}</span>'
+                # 델타 값 포맷팅
+                delta_str = f"{arrow_char} {delta}" if show_arrow else f"{delta}"
+                delta_html = f'<span style="color: {text_color}; font-size: 1rem; margin-left: 8px; font-weight: 600;">{delta_str}</span>'
         except:
-            # 파싱 실패 시 그냥 회색으로 표시
-            delta_html = f'<span style="color: #666; font-size: 0.9rem; margin-left: 8px;">{delta}</span>'
+            delta_html = f'<span style="color: #666; font-size: 1rem; margin-left: 8px;">{delta}</span>'
 
     html_code = f"""
-    <div style="display: flex; flex-direction: column; margin-bottom: 1rem;">
-        <span style="font-size: 0.85rem; color: #555; margin-bottom: 2px;">{label}</span>
+    <div style="display: flex; flex-direction: column; margin-bottom: 1.5rem;">
+        <span style="font-size: 1rem; color: #555; font-weight: 500; margin-bottom: 4px;">{label}</span>
         <div style="display: flex; align-items: baseline;">
-            <span style="font-size: 2rem; font-weight: 700; color: #262730;">{value}</span>
+            <span style="font-size: 2.2rem; font-weight: 700; color: #262730;">{value}</span>
             {delta_html}
         </div>
     </div>
@@ -250,18 +254,20 @@ if df is not None and selected_leader_name:
         
         with m1:
             delta_str = f"{delta_total:+.2f} ({prev_year} 대비)" if prev_year else None
-            custom_metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", delta_str)
+            # 종합 점수: 화살표 표시 (show_arrow=True)
+            custom_metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", delta_str, show_arrow=True)
             
         with m2:
             d_top = get_delta_str(top_comp)
             val_top = f"{latest_series[top_comp]:.1f}" if top_comp != "-" else "-"
-            custom_metric("최고 강점", top_comp, f"{val_top} ({d_top})" if d_top else val_top, delta_color="normal")
+            # 최고 강점: 화살표 없이 색상만 (show_arrow=False)
+            custom_metric("최고 강점", top_comp, f"{val_top} ({d_top})" if d_top else val_top, delta_color="normal", show_arrow=False)
             
         with m3:
             d_bot = get_delta_str(bot_comp)
             val_bot = f"{latest_series[bot_comp]:.1f}" if bot_comp != "-" else "-"
-            # 보완 필요 역량이라도 점수가 올랐으면 초록색(normal)이 맞습니다. (개선됨을 의미)
-            custom_metric("보완 필요", bot_comp, f"{val_bot} ({d_bot})" if d_bot else val_bot, delta_color="normal")
+            # 보완 필요: 화살표 없이 색상만 (show_arrow=False)
+            custom_metric("보완 필요", bot_comp, f"{val_bot} ({d_bot})" if d_bot else val_bot, delta_color="normal", show_arrow=False)
         
         st.divider()
         
