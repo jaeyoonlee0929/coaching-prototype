@@ -96,6 +96,47 @@ def parse_columns(df):
             
     return meta_cols, member_scores, peer_scores, text_cols
 
+# --- 커스텀 Metric 함수 (색상 유지, 화살표 제거) ---
+def custom_metric(label, value, delta=None, delta_color="normal"):
+    """
+    HTML/CSS를 사용하여 화살표 없이 색상만 적용된 Metric을 표시합니다.
+    delta_color: "normal" (양수 초록, 음수 빨강), "inverse" (양수 빨강, 음수 초록), "off" (색상 없음)
+    """
+    delta_html = ""
+    if delta is not None and delta_color != "off":
+        try:
+            delta_val = float(str(delta).split()[0]) # 숫자만 추출
+            if delta_val > 0:
+                color = "green" if delta_color == "normal" else "red"
+                sign = "+"
+            elif delta_val < 0:
+                color = "red" if delta_color == "normal" else "green"
+                sign = ""
+            else:
+                color = "gray"
+                sign = ""
+            
+            if delta_val != 0:
+                # 괄호 안의 텍스트가 있다면 포함
+                extra_text = ""
+                if "(" in str(delta):
+                    extra_text = f" ({str(delta).split('(')[1]}"
+                
+                delta_str = f"{sign}{delta_val:.2f}{extra_text}"
+                delta_html = f'<span style="color: {color}; font-size: 0.9em; font-weight: bold;">{delta_str}</span>'
+        except:
+            pass # 파싱 실패 시 델타 표시 안 함
+
+    st.markdown(f"""
+    <div style="margin-bottom: 10px;">
+        <p style="font-size: 0.9rem; margin-bottom: 0px; color: #666;">{label}</p>
+        <div style="display: flex; align-items: baseline; gap: 8px;">
+            <span style="font-size: 1.8rem; font-weight: 600; color: #333;">{value}</span>
+            {delta_html}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
 # --- 사이드바: 업로드 및 대상자 선택 ---
 with st.sidebar:
     st.title("👑 임원 리더십 코칭")
@@ -202,10 +243,18 @@ if df is not None and selected_leader_name:
         # 지표 출력 (3 Columns: 종합 / 최고 강점 / 보완 필요)
         m1, m2, m3 = st.columns(3)
         
-        m1.metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta_total:+.2f} ({prev_year} 대비)")
-        # delta_color="off"를 추가하여 화살표 제거 (값만 표시)
-        m2.metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}" if top_comp != "-" else "-", delta_color="off")
-        m3.metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}" if bot_comp != "-" else "-", delta_color="off")
+        with m1:
+            custom_metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta_total} ({prev_year} 대비)")
+        with m2:
+            # 강점은 높을수록 좋으므로 normal (초록색 유지) 혹은 색상 없음
+            # 여기선 값만 표시하고 delta는 표시하지 않거나, 전년 대비 증감을 보여줄 수 있음. 
+            # 일단 값만 표시
+            custom_metric("최고 강점", top_comp, f"{latest_series[top_comp]:.1f}", delta_color="off")
+        with m3:
+            # 보완 필요는 낮을수록 나쁨 -> 색상 강조 (빨강)
+            # 여기서는 점수 자체를 붉게 하기보다 delta_color="inverse" 개념을 적용할 delta가 없으므로
+            # 그냥 텍스트로 표시
+            custom_metric("보완 필요", bot_comp, f"{latest_series[bot_comp]:.1f}", delta_color="off")
         
         st.divider()
         
