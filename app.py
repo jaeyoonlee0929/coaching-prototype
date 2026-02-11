@@ -244,7 +244,7 @@ if df is not None and selected_leader_name:
         return None
 
     # --- UI 탭 구성 ---
-    st.title(f"📊 {selected_leader_name} 님 리더십 진단 분석 (3개년)")
+    st.title(f"📊 {selected_leader_name} 님 리더십 진단 분석")
     
     tab1, tab2, tab3 = st.tabs(["📈 종합 대시보드", "📝 주관식 심층분석", "🤖 AI 코칭"])
     
@@ -430,3 +430,4 @@ if df is not None and selected_leader_name:
                     st.error(f"오류: {e}")
             else:
                 st.warning("API Key 미설정")
+
