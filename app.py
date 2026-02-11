@@ -253,6 +253,7 @@ if df is not None and selected_leader_name:
                 comments_text += f"\n[{year} 피드백]\n"
                 for col in text_map[year]:
                     val = leader_data[col]
+                    # 값이 있고, 0이나 빈칸이 아닌 경우만
                     if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
                         clean_col = col.replace(f"_{year}", "")
                         comments_text += f"- {clean_col}: {val}\n"
@@ -295,23 +296,30 @@ if df is not None and selected_leader_name:
     with tab3:
         st.subheader("💬 AI 리더십 코칭")
         
+        # 채팅 히스토리 표시 영역
+        chat_container = st.container()
+        
+        # 채팅 기록 초기화
         if "messages" not in st.session_state:
             st.session_state.messages = []
             welcome = f"{selected_leader_name} 임원님, 반갑습니다.\n\n"
-            welcome += f"최근({latest_year}) 종합 점수는 **{curr_score:.2f}점**입니다. "
+            welcome += f"최근({latest_year}) 구성원 평가 기준 종합 점수는 **{curr_score:.2f}점**입니다. "
             if delta > 0: welcome += "전년 대비 상승했습니다. 📈"
             elif delta < 0: welcome += "전년 대비 다소 하락했습니다. 📉"
             
             st.session_state.messages.append({"role": "assistant", "content": welcome})
             
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]):
-                st.write(msg["content"])
+        with chat_container:
+            for msg in st.session_state.messages:
+                with st.chat_message(msg["role"]):
+                    st.write(msg["content"])
         
+        # 입력창 (항상 하단에 위치)
         if prompt := st.chat_input("질문 입력..."):
             st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.write(prompt)
+            with chat_container:
+                with st.chat_message("user"):
+                    st.write(prompt)
             
             if OPENAI_API_KEY:
                 try:
@@ -321,7 +329,7 @@ if df is not None and selected_leader_name:
                     sys_msg = f"""
                     당신은 임원 전용 코치입니다.
                     대상: {selected_leader_name}
-                    정량 데이터: {avg_scores}
+                    정량 데이터(구성원 기준): {avg_scores}
                     강점: {top_comp}, 약점: {bot_comp}
                     주관식 분석: {qual_context}
                     
@@ -330,9 +338,10 @@ if df is not None and selected_leader_name:
                     
                     msgs = [{"role": "system", "content": sys_msg}] + st.session_state.messages
                     
-                    with st.chat_message("assistant"):
-                        stream = client.chat.completions.create(model="gpt-4o", messages=msgs, stream=True)
-                        res = st.write_stream(stream)
+                    with chat_container:
+                        with st.chat_message("assistant"):
+                            stream = client.chat.completions.create(model="gpt-4o", messages=msgs, stream=True)
+                            res = st.write_stream(stream)
                     st.session_state.messages.append({"role": "assistant", "content": res})
                 except Exception as e:
                     st.error(f"오류: {e}")
