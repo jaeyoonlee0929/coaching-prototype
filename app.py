@@ -289,7 +289,7 @@ if df is not None and selected_leader_name:
         data_context += f"- 종합 점수 변화: {avg_scores}\n"
         data_context += f"- {latest_year}년 최고 강점: {top_comp}, 보완 필요: {bot_comp}\n"
 
-        if st.button("🤖 AI 심층 분석 실행 (3-Point Analysis)"):
+        if st.button("🤖 AI 심층 분석 실행"):
             if not OPENAI_API_KEY:
                 st.error("API Key가 필요합니다.")
             else:
@@ -390,6 +390,7 @@ if df is not None and selected_leader_name:
                     st.error(f"오류: {e}")
             else:
                 st.warning("API Key 미설정")
+
 
 
 
