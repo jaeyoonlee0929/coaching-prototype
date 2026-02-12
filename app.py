@@ -255,14 +255,13 @@ if df is not None and selected_leader_name:
             fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), showlegend=True)
             st.plotly_chart(fig_radar, use_container_width=True)
 
-    # [TAB 2] 주관식 심층분석 (3가지 프레임워크 적용)
+    # [TAB 2] 주관식 심층분석
     with tab2:
         st.subheader("📝 주관식 피드백 심층 분석")
         
-        # 데이터 수집 (연도별 / 대상별)
+        # 데이터 수집
         data_context = ""
         
-        # 1. 구성원 응답 모음
         data_context += "### [1] 구성원 주관식 응답 (3개년)\n"
         for year in sorted_years:
             data_context += f"<{year}년 구성원>\n"
@@ -273,7 +272,6 @@ if df is not None and selected_leader_name:
                         clean_col = col.replace(f"_{year}", "")
                         data_context += f"- {clean_col}: {val}\n"
         
-        # 2. 동료 응답 모음
         data_context += "\n### [2] 동료 임원 주관식 응답 (3개년)\n"
         for year in sorted_years:
             data_context += f"<{year}년 동료>\n"
@@ -284,7 +282,6 @@ if df is not None and selected_leader_name:
                         clean_col = col.replace(f"_동료_{year}", "")
                         data_context += f"- {clean_col}: {val}\n"
         
-        # 3. 객관식 점수 요약 (변화 원인 추적용)
         data_context += "\n### [3] 객관식 점수 변화 추이\n"
         data_context += f"- 종합 점수 변화: {avg_scores}\n"
         data_context += f"- {latest_year}년 최고 강점: {top_comp}, 보완 필요: {bot_comp}\n"
@@ -317,13 +314,13 @@ if df is not None and selected_leader_name:
                         """
                         
                         res = client.chat.completions.create(
-                            model="gpt-5",
+                            model="gpt-4o",
                             messages=[{"role": "user", "content": prompt}]
                         )
                         analysis = res.choices[0].message.content
                         st.success("분석 완료")
                         st.markdown(analysis)
-                        st.session_state['qualitative_analysis'] = analysis # 코칭 탭 공유용
+                        st.session_state['qualitative_analysis'] = analysis 
                     except Exception as e:
                         st.error(f"오류 발생: {e}")
         
@@ -344,9 +341,9 @@ if df is not None and selected_leader_name:
             
             welcome += "현재 가장 고민되시는 리더십 이슈는 무엇인가요? 편하게 말씀해 주시면 대화를 시작하겠습니다.\n\n"
             welcome += """---
-            💡 **추가 제안 (복사 후 질문해주세요)**
-            * 📚 **이론 학습:** 현재 강점 및 보완점과 관련된 최신 리더십 이론 추천
-            * 🎬 **영상 추천:** 리더십 개발을 위한 다양한 강연 추천
+            💡 **추가 제안 (클릭하여 복사 후 질문해주세요)**
+            * 📚 **이론 학습:** 현재 약점과 관련된 최신 리더십 이론 추천
+            * 🎬 **영상 추천:** 리더십 개발을 위한 TED 강연 추천
             * 🗓️ **W/S 제안:** 조직문화 개선을 위한 워크숍 아젠다 제안
             (원하시는 내용을 질문해 주시면 상세히 안내해 드립니다)
             """
@@ -383,7 +380,7 @@ if df is not None and selected_leader_name:
                     
                     with chat_container:
                         with st.chat_message("assistant"):
-                            stream = client.chat.completions.create(model="gpt-5", messages=msgs, stream=True)
+                            stream = client.chat.completions.create(model="gpt-4o", messages=msgs, stream=True)
                             res = st.write_stream(stream)
                     st.session_state.messages.append({"role": "assistant", "content": res})
                 except Exception as e:
@@ -391,6 +388,36 @@ if df is not None and selected_leader_name:
             else:
                 st.warning("API Key 미설정")
 
-
-
-
+# --- 데이터가 없을 때 (초기 랜딩 화면) ---
+else:
+    # 빈 화면을 채워줄 안내 페이지
+    st.title("👑 Executive Leadership AI Coach")
+    st.markdown("---")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.markdown("""
+        ### 📊 플랫폼 소개
+        본 플랫폼은 임원 리더십 진단 결과(3개년)를 기반으로 다각적인 통찰과 **맞춤형 AI 코칭**을 제공하는 시스템입니다.
+        
+        * **정량 데이터 시각화:** 3년치 점수 흐름 및 영역별 밸런스 분석
+        * **주관식 심층 분석:** AI를 통한 구성원/동료의 코멘트 핵심 요약
+        * **AI 코치와의 대화:** 발견된 리더십 Gap을 극복하기 위한 1:1 코칭
+        """)
+        
+    with col2:
+        st.info("""
+        ### 🚀 시작하는 방법
+        1. 좌측 사이드바 메뉴에서 **[엑셀 파일 업로드]** 버튼을 클릭하세요.
+        2. 리더십 진단 결과가 포함된 **엑셀 파일(.xlsx)**을 업로드합니다.
+        3. 업로드가 완료되면, 분석 대상이 되는 **임원 이름을 선택**하세요.
+        """)
+        
+    st.markdown("---")
+    st.markdown("""
+    #### 💡 데이터 형식 안내 (Excel)
+    정확한 분석을 위해 엑셀 파일은 아래와 같은 컬럼명 패턴을 유지해야 합니다.
+    - **구성원 응답 (점수/주관식):** `[역량명/문항명]_24년` (예: 전략적 Insight_24년)
+    - **동료 응답 (점수/주관식):** `[역량명/문항명]_동료_24년` (예: 소통_동료_23년)
+    """)
