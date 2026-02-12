@@ -314,7 +314,7 @@ if df is not None and selected_leader_name:
                         """
                         
                         res = client.chat.completions.create(
-                            model="gpt-4o",
+                            model="gpt-5",
                             messages=[{"role": "user", "content": prompt}]
                         )
                         analysis = res.choices[0].message.content
@@ -380,7 +380,7 @@ if df is not None and selected_leader_name:
                     
                     with chat_container:
                         with st.chat_message("assistant"):
-                            stream = client.chat.completions.create(model="gpt-4o", messages=msgs, stream=True)
+                            stream = client.chat.completions.create(model="gpt-5", messages=msgs, stream=True)
                             res = st.write_stream(stream)
                     st.session_state.messages.append({"role": "assistant", "content": res})
                 except Exception as e:
@@ -413,3 +413,4 @@ else:
         2. 리더십 진단 결과가 포함된 **엑셀 파일(.xlsx)**을 업로드합니다.
         3. 업로드가 완료되면, 분석 대상이 되는 **임원 이름을 선택**하세요.
         """)
+
