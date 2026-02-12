@@ -124,7 +124,7 @@ def custom_metric(label, value, delta=None, delta_color="normal", show_arrow=Fal
 # --- 사이드바 ---
 with st.sidebar:
     st.title("👑 임원 리더십 코칭")
-    st.info("3개년 리더십 진단 결과(Excel)를 업로드하세요.")
+    st.info("리더십 진단 결과(Excel)를 업로드하세요.")
     uploaded_file = st.file_uploader("엑셀 파일 업로드", type=["xlsx", "csv"])
     
     selected_leader = None
@@ -238,7 +238,7 @@ if df is not None and selected_leader_name:
         st.divider()
         c1, c2 = st.columns([1, 1])
         with c1:
-            st.markdown("##### 📅 3개년 종합 점수 추이")
+            st.markdown("##### 📅 리더십 종합 점수 추이")
             trend_df = pd.DataFrame({"Year": sorted_years, "Score": [avg_scores[y] for y in sorted_years]})
             fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5], text="Score")
             fig_line.update_traces(line_color='#2563eb', line_width=3, textposition="top center", texttemplate='%{text:.2f}')
@@ -390,5 +390,6 @@ if df is not None and selected_leader_name:
                     st.error(f"오류: {e}")
             else:
                 st.warning("API Key 미설정")
+
 
 
