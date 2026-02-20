@@ -58,7 +58,6 @@ def parse_columns(df):
     member_pattern = re.compile(r"^(.*)_(\d{2}년)$")
     
     for col in df.columns:
-        # 1. 동료 데이터 확인
         peer_match = peer_pattern.match(col)
         if peer_match:
             year = peer_match.group(2)
@@ -70,7 +69,6 @@ def parse_columns(df):
                 peer_texts[year].append(col)
             continue
             
-        # 2. 구성원 데이터 확인
         member_match = member_pattern.match(col)
         if member_match:
             year = member_match.group(2)
@@ -137,6 +135,15 @@ with st.sidebar:
             leader_list = df[name_col].unique().tolist()
             selected_leader_name = st.selectbox("대상 임원 선택", leader_list)
             leader_data = df[df[name_col] == selected_leader_name].iloc[0]
+            
+            # 다른 임원 선택 시 세션 초기화 로직
+            if "current_leader" not in st.session_state:
+                st.session_state.current_leader = None
+            if selected_leader_name != st.session_state.current_leader:
+                st.session_state.current_leader = selected_leader_name
+                st.session_state.dash_summary = None
+                st.session_state.qualitative_analysis = None
+                st.session_state.messages = []
             
             if not OPENAI_API_KEY:
                 st.warning("⚠️ API Key 미설정 (AI 기능 제한)")
@@ -255,6 +262,75 @@ if df is not None and selected_leader_name:
             fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), showlegend=True)
             st.plotly_chart(fig_radar, use_container_width=True)
 
+        # [NEW] 대시보드 주관식 요약 섹션
+        st.divider()
+        st.markdown(f"##### 💬 {latest_year} 주요 피드백 하이라이트")
+        
+        # 최근 연도 데이터 수집
+        latest_texts = ""
+        raw_preview = []
+        if latest_year in member_text_map:
+            for col in member_text_map[latest_year]:
+                val = leader_data[col]
+                if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
+                    latest_texts += f"- [구성원] {val}\n"
+                    raw_preview.append(f"👤 **구성원:** {val}")
+                    
+        if latest_year in peer_text_map:
+            for col in peer_text_map[latest_year]:
+                val = leader_data[col]
+                if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
+                    latest_texts += f"- [동료] {val}\n"
+                    raw_preview.append(f"🤝 **동료:** {val}")
+
+        if latest_texts.strip():
+            if "dash_summary" not in st.session_state:
+                st.session_state.dash_summary = None
+
+            if st.session_state.dash_summary:
+                # AI 요약 결과가 있을 때 표시
+                st.info(st.session_state.dash_summary)
+                with st.expander("원문 피드백 보기"):
+                    for c in raw_preview:
+                        st.markdown(f"- {c}")
+            else:
+                # AI 요약 전: 원문 미리보기와 버튼 표시
+                st.markdown("<span style='color:#666; font-size:0.9rem;'>최근 평가에 접수된 주관식 코멘트입니다.</span>", unsafe_allow_html=True)
+                for c in raw_preview[:3]: # 최대 3개만 미리보기
+                    st.markdown(f"> {c}")
+                
+                if len(raw_preview) > 3:
+                    st.caption(f"...외 {len(raw_preview)-3}건의 피드백이 있습니다.")
+                
+                st.write("")
+                if st.button("🤖 AI 3줄 핵심 요약 보기"):
+                    if OPENAI_API_KEY:
+                        with st.spinner("가장 중요한 핵심 내용을 요약하고 있습니다..."):
+                            try:
+                                client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                                prompt = f"""
+                                다음은 특정 임원의 {latest_year}년도 다면평가 주관식 피드백 원문입니다.
+                                대시보드에서 한눈에 볼 수 있도록 다음 3가지 항목으로 아주 간결하게(각 1줄씩) 요약해주세요.
+                                1. 주요 강점: 
+                                2. 주요 보완점: 
+                                3. 종합 제언: 
+                                
+                                [피드백 원문]
+                                {latest_texts}
+                                """
+                                res = client.chat.completions.create(
+                                    model="gpt-5-mini",
+                                    messages=[{"role": "user", "content": prompt}]
+                                )
+                                st.session_state.dash_summary = res.choices[0].message.content
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"오류: {e}")
+                    else:
+                        st.warning("API Key가 필요합니다.")
+        else:
+            st.info("해당 연도의 주관식 데이터가 없습니다.")
+
     # [TAB 2] 주관식 심층분석
     with tab2:
         st.subheader("📝 주관식 피드백 심층 분석")
@@ -286,7 +362,7 @@ if df is not None and selected_leader_name:
         data_context += f"- 종합 점수 변화: {avg_scores}\n"
         data_context += f"- {latest_year}년 최고 강점: {top_comp}, 보완 필요: {bot_comp}\n"
 
-        if st.button("🤖 AI 심층 분석 실행"):
+        if st.button("🤖 AI 심층 분석 실행 (3-Point Analysis)"):
             if not OPENAI_API_KEY:
                 st.error("API Key가 필요합니다.")
             else:
@@ -332,7 +408,7 @@ if df is not None and selected_leader_name:
         st.subheader("💬 AI 리더십 코칭")
         chat_container = st.container()
         
-        if "messages" not in st.session_state:
+        if "messages" not in st.session_state or len(st.session_state.messages) == 0:
             st.session_state.messages = []
             welcome = f"{selected_leader_name} 임원님, 반갑습니다. 3년치 리더십 분석을 완료했습니다.\n\n"
             welcome += f"최근({latest_year}) 종합 점수는 **{curr_score:.2f}점**입니다. "
@@ -390,7 +466,6 @@ if df is not None and selected_leader_name:
 
 # --- 데이터가 없을 때 (초기 랜딩 화면) ---
 else:
-    # 빈 화면을 채워줄 안내 페이지
     st.title("👑 Executive Leadership AI Coach")
     st.markdown("---")
     
@@ -413,8 +488,3 @@ else:
         2. 리더십 진단 결과가 포함된 **엑셀 파일(.xlsx)**을 업로드합니다.
         3. 업로드가 완료되면, 분석 대상이 되는 **임원 이름을 선택**하세요.
         """)
-
-
-
-
-
