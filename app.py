@@ -27,6 +27,38 @@ COMPETENCY_GROUPS = {
     "VWBE 문화구축": ["구성원 VWBE환경 조성 활동 지원", "신뢰 기반의 협력 촉진", "패기 인재 인정/육성"]
 }
 
+# --- [UPDATE] 사전 학습 지식 베이스 (Knowledge Base) ---
+# SKMS 원문 및 Workbook의 핵심 내용을 바탕으로 AI가 코칭에 활용할 수 있도록 정리된 프롬프트입니다.
+SKMS_KNOWLEDGE_BASE = """
+[SKMS(SK Management System) 및 사내 고유 철학 핵심 요약]
+본 자료는 SK의 경영철학이자 기업문화의 근간인 SKMS 원문 및 Workbook의 핵심 내용입니다. 리더십 코칭 시 아래 개념들을 적극 인용하여 조언하세요.
+
+1. 경영의 궁극적 목적: '구성원의 지속적인 행복 창출'
+   - 회사는 구성원이 함께 모여 일하며 스스로의 행복을 지속적으로 키워나가는 공동체입니다.
+   - 리더는 구성원들이 행복 경영의 주체로서 역할을 다할 수 있도록 이끌어야 합니다.
+
+2. SUPEX (Super Excellent)
+   - 인간의 능력으로 도달할 수 있는 최고의 수준을 의미합니다.
+   - 기존의 틀을 깨는 혁신적인 목표를 세우고 달성하려는 지향점입니다.
+
+3. VWBE (Voluntarily, Willingly, Brain Engagement)
+   - '자발적이고 의욕적인 두뇌활용'을 뜻합니다.
+   - 구성원이 스스로 동기부여되어 업무에 몰입하는 상태로, SUPEX 달성을 위한 필수 조건입니다.
+   - 리더의 핵심 역할은 구성원이 VWBE 할 수 있는 환경을 조성하는 것입니다.
+
+4. 패기 (일과 싸워 이기는 기질)
+   - 스스로 높은 목표를 세우고(도전), 기존의 틀을 깨며(혁신), 끝까지 완수하는(실행) 태도입니다.
+   - 패기 있는 구성원은 자신의 역량을 지속적으로 개발하고 팀워크를 발휘합니다.
+
+5. Teamwork (팀워크)
+   - 공동의 목표 달성을 위해 서로 소통하고 협력하는 과정입니다.
+   - 리더는 신뢰 기반의 협력을 촉진하고 긍정적인 조직 문화를 구축해야 합니다.
+
+6. 리더의 역할과 솔선수범
+   - 리더는 단순히 지시하는 사람이 아니라, 구성원의 성장과 행복을 지원하는 조력자이자 코치입니다.
+   - 리더 스스로 SKMS를 깊이 이해하고 행동으로 실천(솔선수범)하여 구성원의 귀감이 되어야 합니다.
+"""
+
 # --- 데이터 로드 및 전처리 ---
 @st.cache_data
 def load_data(file):
@@ -186,7 +218,6 @@ if df is not None and selected_leader_name:
     with tab1:
         st.subheader("Overview (구성원 응답 기준)")
         
-        # 지표 출력 (3 Columns: 종합 / 최고 강점 / 보완 필요) - 사용자가 가장 선호했던 기본 형태 유지
         m1, m2, m3 = st.columns(3)
         
         m1.metric(f"{latest_year} 종합 점수", f"{curr_score:.2f}", f"{delta_total:+.2f} ({prev_year} 대비)" if prev_year else None)
@@ -195,7 +226,6 @@ if df is not None and selected_leader_name:
         
         st.divider()
         
-        # 선호하셨던 상/하 레이아웃 (위: 차트 2개 나란히, 아래: 주관식 피드백)
         c1, c2 = st.columns([1, 1])
         
         with c1:
@@ -217,11 +247,9 @@ if df is not None and selected_leader_name:
             fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), showlegend=True, margin=dict(t=20, b=20, l=20, r=20))
             st.plotly_chart(fig_radar, use_container_width=True)
 
-        # 차트 아래에 가로로 넓게 피드백 하이라이트 배치
         st.divider()
         st.markdown(f"##### 💬 {latest_year} 주요 피드백 하이라이트")
         
-        # 최근 연도 데이터 수집
         latest_texts = ""
         raw_preview = []
         if latest_year in member_text_map:
@@ -243,16 +271,13 @@ if df is not None and selected_leader_name:
                 st.session_state.dash_summary = None
 
             if st.session_state.dash_summary:
-                # AI 요약 결과가 있을 때 표시
                 st.info(st.session_state.dash_summary)
                 with st.expander("원문 피드백 보기"):
                     for c in raw_preview:
                         st.markdown(f"- {c}")
             else:
-                # AI 요약 전: 원문 미리보기와 버튼 표시
                 st.markdown("<span style='color:#666; font-size:0.9rem;'>최근 평가에 접수된 주관식 코멘트입니다.</span>", unsafe_allow_html=True)
                 
-                # 가로 공간이 넓으므로 3개 정도만 보여줌
                 for c in raw_preview[:3]: 
                     st.markdown(f"> {c}")
                 
@@ -292,7 +317,6 @@ if df is not None and selected_leader_name:
     with tab2:
         st.subheader("📝 주관식 피드백 심층 분석")
         
-        # 데이터 수집
         data_context = ""
         
         data_context += "### [1] 구성원 주관식 응답 (3개년)\n"
@@ -378,6 +402,7 @@ if df is not None and selected_leader_name:
             * 📚 **이론 학습:** 현재 약점과 관련된 최신 리더십 이론 추천
             * 🎬 **영상 추천:** 리더십 개발을 위한 TED 강연 추천
             * 🗓️ **W/S 제안:** 조직문화 개선을 위한 워크숍 아젠다 제안
+            * 🎯 **SKMS 적용:** 사내 철학(VWBE, SUPEX 등)을 내 팀에 적용하는 방법
             (원하시는 내용을 질문해 주시면 상세히 안내해 드립니다)
             """
             st.session_state.messages.append({"role": "assistant", "content": welcome})
@@ -400,13 +425,17 @@ if df is not None and selected_leader_name:
                     
                     sys_msg = f"""
                     당신은 임원 전용 리더십 코치입니다. 대상: {selected_leader_name}
+                    
                     [데이터] 점수: {avg_scores}, 강점: {top_comp}, 약점: {bot_comp}
                     [주관식 분석] {qual_context}
                     
+                    {SKMS_KNOWLEDGE_BASE}
+                    
                     [가이드]
                     1. **전문가 페르소나:** 깊이 있는 통찰 제공.
-                    2. **추가 제안:** 필요 시 이론/영상/워크숍 추천.
-                    3. **Next Step:** 답변 끝에 항상 코칭 질문(GROW 등)을 던져 대화를 이어나갈 것. (문구: 해당 질문에 답을 해주시면 다음 단계로 이어나가 보겠습니다)
+                    2. **사내 철학 연계:** 질문에 답변할 때 필요하다면 [SKMS 및 사내 고유 철학 핵심 요약]의 내용(VWBE, SUPEX, 구성원 행복 등)을 자연스럽게 인용하여 조언하세요. 
+                    3. **추가 제안:** 필요 시 이론/영상/워크숍 추천.
+                    4. **Next Step:** 답변 끝에 항상 코칭 질문(GROW 등)을 던져 대화를 이어나갈 것. (문구: 해당 질문에 답을 해주시면 다음 단계로 이어나가 보겠습니다)
                     """
                     
                     msgs = [{"role": "system", "content": sys_msg}] + st.session_state.messages
