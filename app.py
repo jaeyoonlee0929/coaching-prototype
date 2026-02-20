@@ -243,14 +243,19 @@ if df is not None and selected_leader_name:
             custom_metric("보완 필요", bot_comp, f"{val_bot} ({d_bot})" if d_bot else val_bot, delta_color="normal", show_arrow=False)
         
         st.divider()
-        c1, c2 = st.columns([1, 1])
-        with c1:
+        
+        # [MODIFIED] 차트 및 피드백 영역 좌/우 분리 (좌: 차트 2개, 우: 피드백 하이라이트)
+        left_col, right_col = st.columns([1, 1])
+        
+        with left_col:
             st.markdown("##### 📅 리더십 종합 점수 추이")
             trend_df = pd.DataFrame({"Year": sorted_years, "Score": [avg_scores[y] for y in sorted_years]})
             fig_line = px.line(trend_df, x="Year", y="Score", markers=True, range_y=[0, 5.5], text="Score")
             fig_line.update_traces(line_color='#2563eb', line_width=3, textposition="top center", texttemplate='%{text:.2f}')
             st.plotly_chart(fig_line, use_container_width=True)
-        with c2:
+            
+            st.divider()
+            
             st.markdown(f"##### 🕸️ 리더십 영역별 변화 ({latest_year})")
             fig_radar = go.Figure()
             colors = ['#cbd5e1', '#94a3b8', '#2563eb'] 
@@ -259,77 +264,78 @@ if df is not None and selected_leader_name:
                 vals = [grouped_scores[year].get(cat, 0) for cat in cats]
                 vals += [vals[0]]
                 fig_radar.add_trace(go.Scatterpolar(r=vals, theta=cats+[cats[0]], fill='toself' if year==latest_year else 'none', name=year, line_color=colors[i] if i<3 else 'black'))
-            fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), showlegend=True)
+            fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), showlegend=True, margin=dict(t=20, b=20, l=20, r=20))
             st.plotly_chart(fig_radar, use_container_width=True)
 
-        # [NEW] 대시보드 주관식 요약 섹션
-        st.divider()
-        st.markdown(f"##### 💬 {latest_year} 주요 피드백 하이라이트")
-        
-        # 최근 연도 데이터 수집
-        latest_texts = ""
-        raw_preview = []
-        if latest_year in member_text_map:
-            for col in member_text_map[latest_year]:
-                val = leader_data[col]
-                if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
-                    latest_texts += f"- [구성원] {val}\n"
-                    raw_preview.append(f"👤 **구성원:** {val}")
+        with right_col:
+            st.markdown(f"##### 💬 {latest_year} 주요 피드백 하이라이트")
+            
+            # 최근 연도 데이터 수집
+            latest_texts = ""
+            raw_preview = []
+            if latest_year in member_text_map:
+                for col in member_text_map[latest_year]:
+                    val = leader_data[col]
+                    if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
+                        latest_texts += f"- [구성원] {val}\n"
+                        raw_preview.append(f"👤 **구성원:** {val}")
+                        
+            if latest_year in peer_text_map:
+                for col in peer_text_map[latest_year]:
+                    val = leader_data[col]
+                    if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
+                        latest_texts += f"- [동료] {val}\n"
+                        raw_preview.append(f"🤝 **동료:** {val}")
+
+            if latest_texts.strip():
+                if "dash_summary" not in st.session_state:
+                    st.session_state.dash_summary = None
+
+                if st.session_state.dash_summary:
+                    # AI 요약 결과가 있을 때 표시
+                    st.info(st.session_state.dash_summary)
+                    with st.expander("원문 피드백 보기"):
+                        for c in raw_preview:
+                            st.markdown(f"- {c}")
+                else:
+                    # AI 요약 전: 원문 미리보기와 버튼 표시
+                    st.markdown("<span style='color:#666; font-size:0.9rem;'>최근 평가에 접수된 주관식 코멘트입니다.</span>", unsafe_allow_html=True)
                     
-        if latest_year in peer_text_map:
-            for col in peer_text_map[latest_year]:
-                val = leader_data[col]
-                if pd.notna(val) and str(val).strip() not in ["0", "-", ""]:
-                    latest_texts += f"- [동료] {val}\n"
-                    raw_preview.append(f"🤝 **동료:** {val}")
-
-        if latest_texts.strip():
-            if "dash_summary" not in st.session_state:
-                st.session_state.dash_summary = None
-
-            if st.session_state.dash_summary:
-                # AI 요약 결과가 있을 때 표시
-                st.info(st.session_state.dash_summary)
-                with st.expander("원문 피드백 보기"):
-                    for c in raw_preview:
-                        st.markdown(f"- {c}")
+                    # 오른쪽 세로 공간이 넉넉하므로 최대 5개까지 미리보기를 보여줍니다.
+                    for c in raw_preview[:5]: 
+                        st.markdown(f"> {c}")
+                    
+                    if len(raw_preview) > 5:
+                        st.caption(f"...외 {len(raw_preview)-5}건의 피드백이 있습니다.")
+                    
+                    st.write("")
+                    if st.button("🤖 AI 3줄 핵심 요약 보기", use_container_width=True):
+                        if OPENAI_API_KEY:
+                            with st.spinner("가장 중요한 핵심 내용을 요약하고 있습니다..."):
+                                try:
+                                    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                                    prompt = f"""
+                                    다음은 특정 임원의 {latest_year}년도 다면평가 주관식 피드백 원문입니다.
+                                    대시보드에서 한눈에 볼 수 있도록 다음 3가지 항목으로 아주 간결하게(각 1줄씩) 요약해주세요.
+                                    1. 주요 강점: 
+                                    2. 주요 보완점: 
+                                    3. 종합 제언: 
+                                    
+                                    [피드백 원문]
+                                    {latest_texts}
+                                    """
+                                    res = client.chat.completions.create(
+                                        model="gpt-5-mini",
+                                        messages=[{"role": "user", "content": prompt}]
+                                    )
+                                    st.session_state.dash_summary = res.choices[0].message.content
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"오류: {e}")
+                        else:
+                            st.warning("API Key가 필요합니다.")
             else:
-                # AI 요약 전: 원문 미리보기와 버튼 표시
-                st.markdown("<span style='color:#666; font-size:0.9rem;'>최근 평가에 접수된 주관식 코멘트입니다.</span>", unsafe_allow_html=True)
-                for c in raw_preview[:3]: # 최대 3개만 미리보기
-                    st.markdown(f"> {c}")
-                
-                if len(raw_preview) > 3:
-                    st.caption(f"...외 {len(raw_preview)-3}건의 피드백이 있습니다.")
-                
-                st.write("")
-                if st.button("🤖 AI 3줄 핵심 요약 보기"):
-                    if OPENAI_API_KEY:
-                        with st.spinner("가장 중요한 핵심 내용을 요약하고 있습니다..."):
-                            try:
-                                client = openai.OpenAI(api_key=OPENAI_API_KEY)
-                                prompt = f"""
-                                다음은 특정 임원의 {latest_year}년도 다면평가 주관식 피드백 원문입니다.
-                                대시보드에서 한눈에 볼 수 있도록 다음 3가지 항목으로 아주 간결하게(각 1줄씩) 요약해주세요.
-                                1. 주요 강점: 
-                                2. 주요 보완점: 
-                                3. 종합 제언: 
-                                
-                                [피드백 원문]
-                                {latest_texts}
-                                """
-                                res = client.chat.completions.create(
-                                    model="gpt-5-mini",
-                                    messages=[{"role": "user", "content": prompt}]
-                                )
-                                st.session_state.dash_summary = res.choices[0].message.content
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"오류: {e}")
-                    else:
-                        st.warning("API Key가 필요합니다.")
-        else:
-            st.info("해당 연도의 주관식 데이터가 없습니다.")
+                st.info("해당 연도의 주관식 데이터가 없습니다.")
 
     # [TAB 2] 주관식 심층분석
     with tab2:
