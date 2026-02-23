@@ -343,7 +343,10 @@ if df is not None and selected_leader_name:
         data_context += f"- 종합 점수 변화: {avg_scores}\n"
         data_context += f"- {latest_year}년 최고 강점: {top_comp}, 보완 필요: {bot_comp}\n"
 
-        if st.button("🤖 AI 심층 분석 실행 (3-Point Analysis)"):
+        # 분석 결과가 이미 있는지 확인하여 버튼 텍스트 변경
+        button_text = "🤖 AI 심층 분석 재실행" if st.session_state.get('qualitative_analysis') else "🤖 AI 심층 분석 실행 (3-Point Analysis)"
+
+        if st.button(button_text):
             if not OPENAI_API_KEY:
                 st.error("API Key가 필요합니다.")
             else:
@@ -374,12 +377,16 @@ if df is not None and selected_leader_name:
                             model="gpt-5-mini",
                             messages=[{"role": "user", "content": prompt}]
                         )
-                        analysis = res.choices[0].message.content
-                        st.success("분석 완료")
-                        st.markdown(analysis)
-                        st.session_state['qualitative_analysis'] = analysis 
+                        # 세션에 결과 저장 후 화면 강제 새로고침(rerun)
+                        st.session_state['qualitative_analysis'] = res.choices[0].message.content 
+                        st.rerun() 
                     except Exception as e:
                         st.error(f"오류 발생: {e}")
+        
+        # 세션에 저장된 분석 결과가 있으면 버튼 밖에서도 항상 화면에 표시
+        if st.session_state.get('qualitative_analysis'):
+            st.success("분석 완료")
+            st.markdown(st.session_state['qualitative_analysis'])
         
         with st.expander("원본 데이터 보기"):
             st.text(data_context)
